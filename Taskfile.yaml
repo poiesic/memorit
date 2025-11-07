@@ -1,0 +1,41 @@
+version: '3'
+
+tasks:
+  generate:
+    desc: Generate code (MUS serialization)
+    cmds:
+      - go generate ./...
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test -v ./...
+
+  build:
+    desc: Build all binaries
+    deps: [generate]
+    cmds:
+      - mkdir -p ./bin
+      - go build -o ./bin/seeder ./cmd/seeder
+      - go build -o ./bin/searcher ./cmd/searcher
+      - go build -o ./bin/musgen ./cmd/musgen
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf ./bin
+
+  tidy:
+    desc: Tidy go modules
+    cmds:
+      - go mod tidy
+
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list

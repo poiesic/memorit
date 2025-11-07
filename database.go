@@ -1,0 +1,101 @@
+package memorit
+
+import (
+	"log/slog"
+
+	"github.com/poiesic/memorit/ai"
+	"github.com/poiesic/memorit/ai/openai"
+	"github.com/poiesic/memorit/ingestion"
+	"github.com/poiesic/memorit/search"
+	"github.com/poiesic/memorit/storage"
+	"github.com/poiesic/memorit/storage/badger"
+)
+
+type Database struct {
+	backend     *badger.Backend
+	chatRepo    storage.ChatRepository
+	conceptRepo storage.ConceptRepository
+	provider    ai.AIProvider
+	logger      *slog.Logger
+}
+
+func NewDatabase(filePath string) (*Database, error) {
+	// Open backend
+	backend, err := badger.OpenBackend(filePath, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create chat repository
+	chatRepo, err := badger.NewChatRepository(backend)
+	if err != nil {
+		backend.Close()
+		return nil, err
+	}
+
+	// Create concept repository
+	conceptRepo, err := badger.NewConceptRepository(backend)
+	if err != nil {
+		chatRepo.Close()
+		backend.Close()
+		return nil, err
+	}
+
+	// Create AI provider with default configuration
+	config := ai.DefaultConfig()
+	provider, err := openai.NewProvider(config)
+	if err != nil {
+		conceptRepo.Close()
+		chatRepo.Close()
+		backend.Close()
+		return nil, err
+	}
+
+	return &Database{
+		backend:     backend,
+		chatRepo:    chatRepo,
+		conceptRepo: conceptRepo,
+		provider:    provider,
+		logger:      slog.Default(),
+	}, nil
+}
+
+func (db *Database) Close() error {
+	// Close AI provider first
+	if err := db.provider.Close(); err != nil {
+		db.logger.Error("error closing AI provider", "err", err)
+	}
+
+	// Close repositories
+	if err := db.conceptRepo.Close(); err != nil {
+		db.logger.Error("error closing concept repository", "err", err)
+		return err
+	}
+	if err := db.chatRepo.Close(); err != nil {
+		db.logger.Error("error closing chat repository", "err", err)
+		return err
+	}
+
+	// Close backend
+	if err := db.backend.Close(); err != nil {
+		db.logger.Error("error closing backend storage", "err", err)
+		return err
+	}
+	return nil
+}
+
+func (db *Database) ChatRepository() storage.ChatRepository {
+	return db.chatRepo
+}
+
+func (db *Database) ConceptRepository() storage.ConceptRepository {
+	return db.conceptRepo
+}
+
+func (db *Database) NewIngestionPipeline(opts ...ingestion.Option) (*ingestion.Pipeline, error) {
+	return ingestion.NewPipeline(db.chatRepo, db.conceptRepo, db.provider, opts...)
+}
+
+func (db *Database) NewSearcher(opts ...search.Option) (*search.Searcher, error) {
+	return search.NewSearcher(db.chatRepo, db.conceptRepo, db.provider, opts...)
+}
