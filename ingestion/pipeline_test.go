@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -476,4 +477,190 @@ func TestEmbeddingProcessor_Process_EmbedderError(t *testing.T) {
 	err = ep.process(ctx, added[0].Id)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "embedder error")
+}
+
+func TestNewPipeline(t *testing.T) {
+	chatRepo, conceptRepo, cleanup := setupTestRepositories(t)
+	defer cleanup()
+
+	embedder := &testEmbedder{}
+	extractor := &testConceptExtractor{responses: make(map[string][]ai.ExtractedConcept)}
+	provider := &testAIProvider{embedder: embedder, extractor: extractor}
+
+	t.Run("valid pipeline", func(t *testing.T) {
+		pipeline, err := NewPipeline(chatRepo, conceptRepo, provider)
+		require.NoError(t, err)
+		require.NotNil(t, pipeline)
+		defer pipeline.Release()
+
+		assert.NotNil(t, pipeline.chatRepository)
+		assert.NotNil(t, pipeline.conceptRepository)
+		assert.NotNil(t, pipeline.embeddingPool)
+		assert.NotNil(t, pipeline.conceptPool)
+	})
+
+	t.Run("nil chat repository", func(t *testing.T) {
+		_, err := NewPipeline(nil, conceptRepo, provider)
+		assert.Equal(t, ErrChatRepositoryRequired, err)
+	})
+
+	t.Run("nil concept repository", func(t *testing.T) {
+		_, err := NewPipeline(chatRepo, nil, provider)
+		assert.Equal(t, ErrConceptRepositoryRequired, err)
+	})
+
+	t.Run("nil provider", func(t *testing.T) {
+		_, err := NewPipeline(chatRepo, conceptRepo, nil)
+		assert.Equal(t, ErrAIProviderRequired, err)
+	})
+}
+
+func TestPipeline_WithOptions(t *testing.T) {
+	chatRepo, conceptRepo, cleanup := setupTestRepositories(t)
+	defer cleanup()
+
+	embedder := &testEmbedder{}
+	extractor := &testConceptExtractor{responses: make(map[string][]ai.ExtractedConcept)}
+	provider := &testAIProvider{embedder: embedder, extractor: extractor}
+
+	t.Run("with pool size", func(t *testing.T) {
+		pipeline, err := NewPipeline(chatRepo, conceptRepo, provider, WithPoolSize(4))
+		require.NoError(t, err)
+		require.NotNil(t, pipeline)
+		defer pipeline.Release()
+
+		// Pool exists and can accept work
+		assert.NotNil(t, pipeline.embeddingPool)
+		assert.NotNil(t, pipeline.conceptPool)
+	})
+
+	t.Run("with pool size zero defaults to 1", func(t *testing.T) {
+		pipeline, err := NewPipeline(chatRepo, conceptRepo, provider, WithPoolSize(0))
+		require.NoError(t, err)
+		require.NotNil(t, pipeline)
+		defer pipeline.Release()
+	})
+
+	t.Run("with custom logger", func(t *testing.T) {
+		logger := slog.Default()
+		pipeline, err := NewPipeline(chatRepo, conceptRepo, provider, WithLogger(logger))
+		require.NoError(t, err)
+		require.NotNil(t, pipeline)
+		defer pipeline.Release()
+
+		assert.Equal(t, logger, pipeline.logger)
+	})
+
+	t.Run("with nil logger falls back to default", func(t *testing.T) {
+		pipeline, err := NewPipeline(chatRepo, conceptRepo, provider, WithLogger(nil))
+		require.NoError(t, err)
+		require.NotNil(t, pipeline)
+		defer pipeline.Release()
+
+		assert.NotNil(t, pipeline.logger)
+	})
+
+	t.Run("with multiple options", func(t *testing.T) {
+		logger := slog.Default()
+		pipeline, err := NewPipeline(
+			chatRepo,
+			conceptRepo,
+			provider,
+			WithPoolSize(2),
+			WithLogger(logger),
+		)
+		require.NoError(t, err)
+		require.NotNil(t, pipeline)
+		defer pipeline.Release()
+
+		assert.Equal(t, logger, pipeline.logger)
+	})
+}
+
+func TestPipeline_Ingest(t *testing.T) {
+	chatRepo, conceptRepo, cleanup := setupTestRepositories(t)
+	defer cleanup()
+
+	embedder := &testEmbedder{
+		embeddings: [][]float32{{0.1, 0.2, 0.3}},
+	}
+	extractor := &testConceptExtractor{
+		responses: map[string][]ai.ExtractedConcept{
+			"Hello world": {
+				{Name: "greeting", Type: "action", Importance: 8},
+			},
+		},
+	}
+	provider := &testAIProvider{embedder: embedder, extractor: extractor}
+
+	pipeline, err := NewPipeline(chatRepo, conceptRepo, provider, WithPoolSize(1))
+	require.NoError(t, err)
+	defer pipeline.Release()
+
+	ctx := context.Background()
+
+	t.Run("ingest single message", func(t *testing.T) {
+		err := pipeline.Ingest(ctx, core.SpeakerTypeHuman, "Hello world")
+		require.NoError(t, err)
+
+		// Give async processors time to complete
+		time.Sleep(100 * time.Millisecond)
+
+		// Verify record was added
+		records, err := chatRepo.GetChatRecordsByDateRange(ctx, time.Now().Add(-1*time.Minute), time.Now().Add(1*time.Minute))
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, len(records), 1)
+	})
+
+	t.Run("ingest multiple messages", func(t *testing.T) {
+		err := pipeline.Ingest(ctx, core.SpeakerTypeAI, "Message 1", "Message 2", "Message 3")
+		require.NoError(t, err)
+
+		// Give async processors time to complete
+		time.Sleep(100 * time.Millisecond)
+	})
+
+	t.Run("ingest with no messages", func(t *testing.T) {
+		err := pipeline.Ingest(ctx, core.SpeakerTypeHuman)
+		require.NoError(t, err)
+	})
+}
+
+func TestPipeline_Release(t *testing.T) {
+	chatRepo, conceptRepo, cleanup := setupTestRepositories(t)
+	defer cleanup()
+
+	embedder := &testEmbedder{}
+	extractor := &testConceptExtractor{responses: make(map[string][]ai.ExtractedConcept)}
+	provider := &testAIProvider{embedder: embedder, extractor: extractor}
+
+	pipeline, err := NewPipeline(chatRepo, conceptRepo, provider)
+	require.NoError(t, err)
+
+	// Release should not panic
+	pipeline.Release()
+
+	// Multiple releases should not panic
+	pipeline.Release()
+}
+
+func TestConceptProcessor_Checkpoint(t *testing.T) {
+	cp, _ := setupTestConceptProcessor(t)
+
+	// Checkpoint should not error (currently a no-op)
+	err := cp.checkpoint()
+	require.NoError(t, err)
+}
+
+func TestEmbeddingProcessor_Checkpoint(t *testing.T) {
+	chatRepo, _, cleanup := setupTestRepositories(t)
+	defer cleanup()
+
+	embedder := &testEmbedder{}
+	ep, err := newEmbeddingProcessor(chatRepo, embedder, nil)
+	require.NoError(t, err)
+
+	// Checkpoint should not error (currently a no-op)
+	err = ep.checkpoint()
+	require.NoError(t, err)
 }

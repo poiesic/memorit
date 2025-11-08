@@ -133,3 +133,172 @@ func TestConceptRefIndex(t *testing.T) {
 		t.Fatalf("Expected 1 record, got %d", len(recordIDs))
 	}
 }
+
+func TestUpdateChatRecords(t *testing.T) {
+	chatRepo, conceptRepo, backend, err := NewMemoryRepositories()
+	if err != nil {
+		t.Fatalf("Failed to create repositories: %v", err)
+	}
+	defer func() { conceptRepo.Close(); chatRepo.Close(); backend.Close() }()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// Add a record
+	record := &core.ChatRecord{
+		Speaker:   core.SpeakerTypeHuman,
+		Contents:  "Original content",
+		Timestamp: now,
+	}
+	added, err := chatRepo.AddChatRecords(ctx, record)
+	if err != nil {
+		t.Fatalf("Failed to add record: %v", err)
+	}
+
+	// Update the record
+	added[0].Contents = "Updated content"
+	updated, err := chatRepo.UpdateChatRecords(ctx, added[0])
+	if err != nil {
+		t.Fatalf("Failed to update record: %v", err)
+	}
+
+	if updated[0].Contents != "Updated content" {
+		t.Fatalf("Expected updated content, got %s", updated[0].Contents)
+	}
+
+	// Verify the update persisted
+	retrieved, err := chatRepo.GetChatRecord(ctx, added[0].Id)
+	if err != nil {
+		t.Fatalf("Failed to get record: %v", err)
+	}
+
+	if retrieved.Contents != "Updated content" {
+		t.Fatalf("Expected updated content to persist, got %s", retrieved.Contents)
+	}
+}
+
+func TestUpdateChatRecords_WithConceptChanges(t *testing.T) {
+	chatRepo, conceptRepo, backend, err := NewMemoryRepositories()
+	if err != nil {
+		t.Fatalf("Failed to create repositories: %v", err)
+	}
+	defer func() { conceptRepo.Close(); chatRepo.Close(); backend.Close() }()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// Add a concept
+	concept := &core.Concept{
+		Name: "test",
+		Type: "entity",
+	}
+	addedConcepts, err := conceptRepo.AddConcepts(ctx, concept)
+	if err != nil {
+		t.Fatalf("Failed to add concept: %v", err)
+	}
+
+	// Add a record with concept
+	record := &core.ChatRecord{
+		Speaker:   core.SpeakerTypeHuman,
+		Contents:  "Test content",
+		Timestamp: now,
+		Concepts: []core.ConceptRef{
+			{ConceptId: addedConcepts[0].Id, Importance: 8},
+		},
+	}
+	added, err := chatRepo.AddChatRecords(ctx, record)
+	if err != nil {
+		t.Fatalf("Failed to add record: %v", err)
+	}
+
+	// Update record to remove concepts
+	added[0].Concepts = []core.ConceptRef{}
+	_, err = chatRepo.UpdateChatRecords(ctx, added[0])
+	if err != nil {
+		t.Fatalf("Failed to update record: %v", err)
+	}
+
+	// Verify concept index was updated
+	recordIDs, err := chatRepo.GetChatRecordsByConcept(ctx, addedConcepts[0].Id)
+	if err != nil {
+		t.Fatalf("Failed to get records by concept: %v", err)
+	}
+
+	if len(recordIDs) != 0 {
+		t.Fatalf("Expected 0 records after concept removal, got %d", len(recordIDs))
+	}
+}
+
+func TestDeleteChatRecords(t *testing.T) {
+	chatRepo, conceptRepo, backend, err := NewMemoryRepositories()
+	if err != nil {
+		t.Fatalf("Failed to create repositories: %v", err)
+	}
+	defer func() { conceptRepo.Close(); chatRepo.Close(); backend.Close() }()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// Add records
+	records := []*core.ChatRecord{
+		{Speaker: core.SpeakerTypeHuman, Contents: "Message 1", Timestamp: now},
+		{Speaker: core.SpeakerTypeHuman, Contents: "Message 2", Timestamp: now},
+	}
+	added, err := chatRepo.AddChatRecords(ctx, records...)
+	if err != nil {
+		t.Fatalf("Failed to add records: %v", err)
+	}
+
+	// Delete first record
+	err = chatRepo.DeleteChatRecords(ctx, added[0].Id)
+	if err != nil {
+		t.Fatalf("Failed to delete record: %v", err)
+	}
+
+	// Verify it's deleted
+	_, err = chatRepo.GetChatRecord(ctx, added[0].Id)
+	if err == nil {
+		t.Fatal("Expected error when getting deleted record")
+	}
+
+	// Verify second record still exists
+	retrieved, err := chatRepo.GetChatRecord(ctx, added[1].Id)
+	if err != nil {
+		t.Fatalf("Failed to get remaining record: %v", err)
+	}
+	if retrieved.Contents != "Message 2" {
+		t.Fatalf("Expected 'Message 2', got %s", retrieved.Contents)
+	}
+}
+
+func TestGetChatRecords_Multiple(t *testing.T) {
+	chatRepo, conceptRepo, backend, err := NewMemoryRepositories()
+	if err != nil {
+		t.Fatalf("Failed to create repositories: %v", err)
+	}
+	defer func() { conceptRepo.Close(); chatRepo.Close(); backend.Close() }()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// Add records
+	records := []*core.ChatRecord{
+		{Speaker: core.SpeakerTypeHuman, Contents: "Message 1", Timestamp: now},
+		{Speaker: core.SpeakerTypeHuman, Contents: "Message 2", Timestamp: now},
+		{Speaker: core.SpeakerTypeHuman, Contents: "Message 3", Timestamp: now},
+	}
+	added, err := chatRepo.AddChatRecords(ctx, records...)
+	if err != nil {
+		t.Fatalf("Failed to add records: %v", err)
+	}
+
+	// Get multiple records
+	retrieved, err := chatRepo.GetChatRecords(ctx, added[0].Id, added[2].Id)
+	if err != nil {
+		t.Fatalf("Failed to get records: %v", err)
+	}
+
+	if len(retrieved) != 2 {
+		t.Fatalf("Expected 2 records, got %d", len(retrieved))
+	}
+}
