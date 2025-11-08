@@ -2,165 +2,160 @@
 
 A semantic memory system for storing and retrieving conversational data using embeddings and concept extraction.
 
+## Features
+
+- **Hybrid Search**: Combines vector similarity, conceptual matching, and keyword search
+- **Concept Extraction**: Automatically extracts semantic concepts from conversations
+- **Clean Architecture**: Well-defined separation between domain, storage, and AI layers
+- **Concurrent Processing**: Async embedding and concept extraction with worker pools
+- **Pluggable Backends**: Abstract interfaces for storage and AI services
+- **Fast Serialization**: Uses mus-go for efficient binary serialization
+
 ## Architecture
 
 Memorit follows Clean Architecture principles with clear separation of concerns:
 
+```
+memorit/
+├── core/           # Pure domain models (ChatRecord, Concept, ID, SpeakerType)
+├── storage/        # Storage abstraction layer
+│   └── badger/     # BadgerDB implementation
+├── ai/             # AI service abstractions
+│   ├── openai/     # OpenAI-compatible implementation
+│   └── mock/       # Test doubles
+├── ingestion/      # Pipeline for processing chat records
+├── search/         # Hybrid semantic search engine
+└── cmd/            # Command-line applications
+    ├── seeder/     # Database seeding utility
+    ├── searcher/   # Search interface
+    └── musgen/     # Code generation for serialization
+```
+
 ### Core Domain (`core/`)
 
-The heart of the application containing pure domain models and business rules with zero external dependencies (except standard library).
+Pure domain models with zero external dependencies:
+- Domain entities: `ChatRecord`, `Concept`, `ConceptRef`, `ID`, `SpeakerType`
+- Business validation rules
+- Domain-specific errors
 
-- **Models**: `ChatRecord`, `Concept`, `ConceptRef`, `ID`, `SpeakerType`
-- **Validation**: Domain-specific validation rules
-- **Errors**: Domain error types
+### Storage Layer (`storage/`)
 
-The core domain is dependency-free and can be imported by all other layers.
+Repository pattern with BadgerDB implementation:
+- `ChatRepository`: Chat record operations
+- `ConceptRepository`: Concept operations
+- `VectorSearcher`: Vector similarity search
+- Thread-safe with context support
 
-### Types (`types/`)
+### AI Layer (`ai/`)
 
-Temporary serialization layer that re-exports core types for backward compatibility. Contains marshaling/unmarshaling code for database persistence using mus-go.
+Provider abstraction for AI services:
+- `Embedder`: Generate vector embeddings from text
+- `ConceptExtractor`: Extract semantic concepts
+- `AIProvider`: Unified interface for AI operations
+- Includes OpenAI and mock implementations
 
-**Note**: This package will be moved to the storage layer in Phase 2 of the refactoring.
+### Ingestion Pipeline (`ingestion/`)
 
-### Application Layer (root package)
+Concurrent processing pipeline:
+- Stores chat records
+- Generates embeddings asynchronously
+- Extracts and assigns concepts in parallel
+- Worker pools for maximum throughput
 
-Current monolithic implementation containing:
+### Search Engine (`search/`)
 
-- Storage layer (BadgerDB)
-- AI integrations (OpenAI, embeddings)
-- Processing pipeline (embedding and concept processors)
-- Search functionality
-- Ingestion system
+Multi-stage hybrid search:
+- Semantic search via vector embeddings
+- Conceptual search using extracted concepts
+- Keyword matching with stop-word filtering
+- Ranked results with relevance scoring
 
-**Note**: This layer will be refactored into separate packages (`storage/`, `ai/`, `pipeline/`, `search/`, `app/`) in future phases.
+## Quick Start
 
-## Building
+### Prerequisites
 
-This project uses [Task](https://taskfile.dev/) for build automation:
+- Go 1.25.3+
+- [Task](https://taskfile.dev/) for build automation
+
+### Building
 
 ```bash
-# Run tests
-task test
-
 # Build all binaries
 task build
 
+# Run tests
+task test
+
+# Generate serialization code
+task generate
+
 # Run static analysis
 task vet
-
-# Clean build artifacts
-task clean
-
-# Tidy dependencies
-task tidy
 ```
 
-## Commands
+### Usage
 
-### Seeder
-
-Seeds the database with conversation data.
-
+**Seed the database:**
 ```bash
+# Use built-in test data
 ./bin/seeder
+
+# Load from file
+./bin/seeder -src data.txt
 ```
 
-### Searcher
-
-Performs semantic search over stored conversations.
-
+**Search conversations:**
 ```bash
 ./bin/searcher
 ```
 
-### Musgen
-
-Generates serialization code using mus-go.
-
-```bash
-./bin/musgen
-```
-
 ## Development
 
-### Project Structure
-
-```
-memorit/
-├── core/               # Pure domain models (Phase 1 ✓)
-│   ├── models.go      # Domain entities
-│   ├── errors.go      # Domain errors
-│   ├── validation.go  # Business rules
-│   └── doc.go         # Package documentation
-├── types/             # Serialization layer (temporary)
-│   ├── types.go       # Re-exports core types
-│   ├── marshal.go     # Marshaling functions
-│   └── *.gen.go       # Generated code
-├── cmd/               # Command-line applications
-│   ├── seeder/
-│   ├── searcher/
-│   └── musgen/
-├── *.go               # Current monolithic implementation
-└── *_test.go          # Tests
-```
-
-### Refactoring Status
-
-- **Phase 1: Core Domain Extraction** ✓ Complete
-- **Phase 2: Storage Abstraction** - Planned
-- **Phase 3: AI Services Abstraction** - Planned
-- **Phase 4: Pipeline Refactoring** - Planned
-- **Phase 5: Search Service** - Planned
-- **Phase 6: Application Layer** - Planned
-- **Phase 7: Dependency Injection** - Planned
-- **Phase 8: Testing & Documentation** - Planned
-
-See `refactor.md` for the complete refactoring plan.
-
-## Testing
+### Running Tests
 
 ```bash
-# Run all tests
+# All tests
 task test
 
-# Run tests for specific package
-go test -v ./core/
-
-# Run with coverage
-go test -cover ./...
+# Specific package with coverage
+go test -v -cover ./core/
+go test -v -cover ./storage/badger/
 ```
 
-## Domain Validation
+### Code Generation
 
-The core domain implements validation rules for business invariants:
+Memorit uses mus-go for binary serialization:
 
-### ChatRecord Validation
+```bash
+# Regenerate serialization code
+task generate
 
+# Or directly
+go generate ./...
+```
+
+### Domain Validation
+
+The core domain enforces business invariants:
+
+**ChatRecord validation:**
 - Contents must not be empty
 - SpeakerType must be valid (Human or AI)
 - Timestamp must not be in the future
 
-**Not validated** (populated by processors):
-- Vector embeddings
-- Concept references
-- ID values (0 is valid)
-
-### Concept Validation
-
+**Concept validation:**
 - Name must not be empty
 - Type must not be empty
 
-**Not validated**:
-- Vector embeddings (populated by embedding processor)
-- ID values (0 is valid)
+Fields populated by processors (embeddings, IDs) are not validated at the domain level.
 
 ## Dependencies
 
-- Go 1.25.3+
-- BadgerDB v4 - Embedded key-value database
-- langchaingo - LLM and embedding integrations
-- mus-go - Fast binary serialization
-- Task - Build automation
+- [BadgerDB v4](https://github.com/dgraph-io/badger) - Embedded key-value store
+- [langchaingo](https://github.com/tmc/langchaingo) - LLM and embedding integrations
+- [mus-go](https://github.com/mus-format/mus-go) - Fast binary serialization
+- [ants](https://github.com/panjf2000/ants) - Worker pool implementation
+- [Task](https://taskfile.dev/) - Build automation
 
 ## License
 
