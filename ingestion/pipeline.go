@@ -143,18 +143,34 @@ func NewPipeline(
 	return p, nil
 }
 
+// IngestOptions holds optional parameters for ingestion.
+type IngestOptions struct {
+	Metadata  map[string]string // Optional metadata to attach to records
+	Timestamp time.Time         // Optional timestamp (uses current time if zero)
+}
+
 // Ingest adds messages as chat records and processes them asynchronously.
 // The speakerType is applied to all messages in the batch.
 // Processing includes generating embeddings and extracting concepts.
 // Errors during async processing are logged but do not fail the ingestion.
-func (p *Pipeline) Ingest(ctx context.Context, speakerType core.SpeakerType, messages ...string) error {
+func (p *Pipeline) Ingest(ctx context.Context, speakerType core.SpeakerType, messages []string, opts *IngestOptions) error {
+	if opts == nil {
+		opts = &IngestOptions{}
+	}
+
 	// Create records
 	records := make([]*core.ChatRecord, len(messages))
 	for i, message := range messages {
+		timestamp := opts.Timestamp
+		if timestamp.IsZero() {
+			timestamp = time.Now().UTC()
+		}
+
 		records[i] = &core.ChatRecord{
 			Speaker:   speakerType,
 			Contents:  message,
-			Timestamp: time.Now().UTC(),
+			Timestamp: timestamp,
+			Metadata:  opts.Metadata,
 		}
 	}
 

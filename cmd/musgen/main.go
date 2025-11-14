@@ -43,6 +43,7 @@ func main() {
 		structops.WithField(opts),
 		structops.WithField(opts),
 		structops.WithField(),
+		structops.WithField(),
 		structops.WithField())
 	if err != nil {
 		panic(err)

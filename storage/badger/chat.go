@@ -261,6 +261,60 @@ func (r *ChatRepository) GetChatRecordsByDateRange(ctx context.Context, start, e
 	return results, err
 }
 
+// GetRecentChatRecords retrieves the N most recent chat records, ordered by timestamp descending.
+func (r *ChatRepository) GetRecentChatRecords(ctx context.Context, limit int) ([]*core.ChatRecord, error) {
+	var results []*core.ChatRecord
+	err := r.backend.WithTx(func(tx *badger.Txn) error {
+		// Use reverse iterator to get most recent records first
+		opts := badger.DefaultIteratorOptions
+		opts.Reverse = true
+
+		iter := tx.NewIterator(opts)
+		defer iter.Close()
+
+		// Start from the end of the chat date prefix (to get all date-based records)
+		// We seek to the last possible key with this prefix
+		startKey := makePartialChatDateKey(time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC))
+
+		// Prefix for chat date index keys
+		prefix := []byte(chatRecordDatePrefix + ":")
+
+		count := 0
+		for iter.Seek(startKey); iter.Valid() && count < limit; iter.Next() {
+			key := iter.Item().Key()
+
+			// Check if we're still in the chat date index
+			if len(key) < len(prefix) || slices.Compare(key[:len(prefix)], prefix) != 0 {
+				break
+			}
+
+			// Read the ID from the index
+			var recordID core.ID
+			if err := iter.Item().Value(func(val []byte) error {
+				var err error
+				recordID, err = storage.UnmarshalID(val)
+				return err
+			}); err != nil {
+				return err
+			}
+
+			// Look up the full record
+			recordKey := makeChatRecordKey(recordID)
+			record, err := r.readChatRecord(tx, recordKey)
+			if err != nil {
+				return err
+			}
+			if record != nil {
+				results = append(results, record)
+				count++
+			}
+		}
+		return nil
+	}, false)
+
+	return results, err
+}
+
 // GetChatRecordsByConcept retrieves IDs of chat records associated with a concept.
 func (r *ChatRepository) GetChatRecordsByConcept(ctx context.Context, conceptID core.ID) ([]core.ID, error) {
 	var recordIDs []core.ID

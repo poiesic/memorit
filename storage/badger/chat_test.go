@@ -89,6 +89,88 @@ func TestChatRecordDateRange(t *testing.T) {
 	}
 }
 
+func TestGetRecentChatRecords(t *testing.T) {
+	chatRepo, conceptRepo, backend, err := NewMemoryRepositories()
+	if err != nil {
+		t.Fatalf("Failed to create repository: %v", err)
+	}
+	defer func() { conceptRepo.Close(); chatRepo.Close(); backend.Close() }()
+
+	ctx := context.Background()
+
+	// Add records with incrementing timestamps
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	records := []*core.ChatRecord{
+		{Speaker: core.SpeakerTypeHuman, Contents: "Message 1", Timestamp: now.Add(-4 * time.Hour)},
+		{Speaker: core.SpeakerTypeAI, Contents: "Response 1", Timestamp: now.Add(-3 * time.Hour)},
+		{Speaker: core.SpeakerTypeHuman, Contents: "Message 2", Timestamp: now.Add(-2 * time.Hour)},
+		{Speaker: core.SpeakerTypeAI, Contents: "Response 2", Timestamp: now.Add(-1 * time.Hour)},
+		{Speaker: core.SpeakerTypeHuman, Contents: "Message 3", Timestamp: now},
+	}
+
+	_, err = chatRepo.AddChatRecords(ctx, records...)
+	if err != nil {
+		t.Fatalf("Failed to add chat records: %v", err)
+	}
+
+	// Test: Get last 3 records
+	results, err := chatRepo.GetRecentChatRecords(ctx, 3)
+	if err != nil {
+		t.Fatalf("Failed to get recent records: %v", err)
+	}
+
+	if len(results) != 3 {
+		t.Fatalf("Expected 3 records, got %d", len(results))
+	}
+
+	// Verify order: most recent first
+	if results[0].Contents != "Message 3" {
+		t.Errorf("Expected 'Message 3' first, got '%s'", results[0].Contents)
+	}
+	if results[1].Contents != "Response 2" {
+		t.Errorf("Expected 'Response 2' second, got '%s'", results[1].Contents)
+	}
+	if results[2].Contents != "Message 2" {
+		t.Errorf("Expected 'Message 2' third, got '%s'", results[2].Contents)
+	}
+
+	// Test: Get all records
+	allResults, err := chatRepo.GetRecentChatRecords(ctx, 10)
+	if err != nil {
+		t.Fatalf("Failed to get all records: %v", err)
+	}
+
+	if len(allResults) != 5 {
+		t.Fatalf("Expected 5 records, got %d", len(allResults))
+	}
+
+	// Test: Get zero records
+	zeroResults, err := chatRepo.GetRecentChatRecords(ctx, 0)
+	if err != nil {
+		t.Fatalf("Failed to get zero records: %v", err)
+	}
+
+	if len(zeroResults) != 0 {
+		t.Fatalf("Expected 0 records, got %d", len(zeroResults))
+	}
+
+	// Test: Empty database
+	chatRepo2, conceptRepo2, backend2, err := NewMemoryRepositories()
+	if err != nil {
+		t.Fatalf("Failed to create second repository: %v", err)
+	}
+	defer func() { conceptRepo2.Close(); chatRepo2.Close(); backend2.Close() }()
+
+	emptyResults, err := chatRepo2.GetRecentChatRecords(ctx, 10)
+	if err != nil {
+		t.Fatalf("Failed to query empty database: %v", err)
+	}
+
+	if len(emptyResults) != 0 {
+		t.Fatalf("Expected 0 records from empty database, got %d", len(emptyResults))
+	}
+}
+
 func TestConceptRefIndex(t *testing.T) {
 	chatRepo, conceptRepo, backend, err := NewMemoryRepositories()
 	if err != nil {

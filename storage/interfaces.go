@@ -56,6 +56,10 @@ type ChatRepository interface {
 	// Returns records where start <= Timestamp < end, ordered by timestamp.
 	GetChatRecordsByDateRange(ctx context.Context, start, end time.Time) ([]*core.ChatRecord, error)
 
+	// GetRecentChatRecords retrieves the N most recent chat records, ordered by timestamp descending.
+	// Returns up to limit records, with the most recent first.
+	GetRecentChatRecords(ctx context.Context, limit int) ([]*core.ChatRecord, error)
+
 	// GetChatRecordsByConcept retrieves IDs of chat records associated with a concept.
 	// Returns only record IDs, not full records.
 	GetChatRecordsByConcept(ctx context.Context, conceptID core.ID) ([]core.ID, error)

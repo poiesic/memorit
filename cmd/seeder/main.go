@@ -263,7 +263,7 @@ func ingestBatched(ctx context.Context, pipeline *ingestion.Pipeline, source ite
 	for line := range source {
 		batch = append(batch, line)
 		if len(batch) == batchSize {
-			if err := pipeline.Ingest(ctx, core.SpeakerTypeHuman, batch...); err != nil {
+			if err := pipeline.Ingest(ctx, core.SpeakerTypeHuman, batch, nil); err != nil {
 				return err
 			}
 			batch = batch[:0]
@@ -272,7 +272,7 @@ func ingestBatched(ctx context.Context, pipeline *ingestion.Pipeline, source ite
 
 	// Process any remaining lines
 	if len(batch) > 0 {
-		if err := pipeline.Ingest(ctx, core.SpeakerTypeHuman, batch...); err != nil {
+		if err := pipeline.Ingest(ctx, core.SpeakerTypeHuman, batch, nil); err != nil {
 			return err
 		}
 	}

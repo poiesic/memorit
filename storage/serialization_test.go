@@ -111,6 +111,49 @@ func TestMarshalUnmarshalChatRecord(t *testing.T) {
 					{ConceptId: core.ID(300), Importance: 9},
 				},
 				Vector: []float32{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8},
+				Metadata: map[string]string{
+					"role":     "technical",
+					"provider": "anthropic",
+					"model":    "claude-3-5-sonnet-20241022",
+				},
+			},
+		},
+		{
+			name: "record with simple metadata",
+			record: &core.ChatRecord{
+				Id:         core.ID(7),
+				Speaker:    core.SpeakerTypeAI,
+				Contents:   "Response with metadata",
+				Timestamp:  now,
+				InsertedAt: now,
+				UpdatedAt:  now,
+				Metadata: map[string]string{
+					"role": "assistant",
+				},
+			},
+		},
+		{
+			name: "record with empty metadata map",
+			record: &core.ChatRecord{
+				Id:         core.ID(8),
+				Speaker:    core.SpeakerTypeHuman,
+				Contents:   "User message with empty metadata",
+				Timestamp:  now,
+				InsertedAt: now,
+				UpdatedAt:  now,
+				Metadata:   map[string]string{},
+			},
+		},
+		{
+			name: "record with nil metadata",
+			record: &core.ChatRecord{
+				Id:         core.ID(9),
+				Speaker:    core.SpeakerTypeHuman,
+				Contents:   "User message with nil metadata",
+				Timestamp:  now,
+				InsertedAt: now,
+				UpdatedAt:  now,
+				Metadata:   nil,
 			},
 		},
 		{
@@ -166,6 +209,12 @@ func TestMarshalUnmarshalChatRecord(t *testing.T) {
 				assert.Empty(t, decoded.Vector)
 			} else {
 				assert.Equal(t, tt.record.Vector, decoded.Vector)
+			}
+			// Handle nil vs empty map for Metadata
+			if len(tt.record.Metadata) == 0 {
+				assert.Empty(t, decoded.Metadata)
+			} else {
+				assert.Equal(t, tt.record.Metadata, decoded.Metadata)
 			}
 		})
 	}
@@ -310,6 +359,10 @@ func TestRoundTripConsistency(t *testing.T) {
 				{ConceptId: core.ID(1), Importance: 8},
 			},
 			Vector: []float32{0.1, 0.2, 0.3},
+			Metadata: map[string]string{
+				"role":     "assistant",
+				"provider": "test",
+			},
 		}
 
 		// Perform 3 marshal-unmarshal cycles
@@ -327,5 +380,6 @@ func TestRoundTripConsistency(t *testing.T) {
 		assert.Equal(t, original.Contents, current.Contents)
 		assert.Equal(t, original.Concepts, current.Concepts)
 		assert.Equal(t, original.Vector, current.Vector)
+		assert.Equal(t, original.Metadata, current.Metadata)
 	})
 }

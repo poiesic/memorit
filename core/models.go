@@ -38,11 +38,12 @@ type ChatRecord struct {
 	Id         ID
 	Speaker    SpeakerType
 	Contents   string
-	Timestamp  time.Time   // When the message was originally sent
-	InsertedAt time.Time   // When the record was inserted into the database
-	UpdatedAt  time.Time   // When the record was last updated
-	Concepts   []ConceptRef // Concepts extracted from the message (populated by processors)
-	Vector     []float32   // Embedding vector for semantic search (populated by processors)
+	Timestamp  time.Time      // When the message was originally sent
+	InsertedAt time.Time      // When the record was inserted into the database
+	UpdatedAt  time.Time      // When the record was last updated
+	Concepts   []ConceptRef   // Concepts extracted from the message (populated by processors)
+	Vector     []float32      // Embedding vector for semantic search (populated by processors)
+	Metadata   map[string]string // Optional metadata (e.g., "role", "provider", "model")
 }
 
 // Concept represents a domain concept extracted from chat messages.

@@ -19,7 +19,28 @@ type Database struct {
 	logger      *slog.Logger
 }
 
-func NewDatabase(filePath string) (*Database, error) {
+// DatabaseOption configures a Database.
+type DatabaseOption func(*databaseOptions)
+
+type databaseOptions struct {
+	aiConfig *ai.Config
+}
+
+// WithAIConfig sets a custom AI configuration for embeddings and concept extraction.
+func WithAIConfig(config *ai.Config) DatabaseOption {
+	return func(opts *databaseOptions) {
+		opts.aiConfig = config
+	}
+}
+
+func NewDatabase(filePath string, opts ...DatabaseOption) (*Database, error) {
+	// Apply options
+	options := &databaseOptions{
+		aiConfig: ai.DefaultConfig(), // Default if not provided
+	}
+	for _, opt := range opts {
+		opt(options)
+	}
 	// Open backend
 	backend, err := badger.OpenBackend(filePath, false)
 	if err != nil {
@@ -41,9 +62,8 @@ func NewDatabase(filePath string) (*Database, error) {
 		return nil, err
 	}
 
-	// Create AI provider with default configuration
-	config := ai.DefaultConfig()
-	provider, err := openai.NewProvider(config)
+	// Create AI provider with configured settings
+	provider, err := openai.NewProvider(options.aiConfig)
 	if err != nil {
 		conceptRepo.Close()
 		chatRepo.Close()

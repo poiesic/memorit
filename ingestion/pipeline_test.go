@@ -600,7 +600,7 @@ func TestPipeline_Ingest(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("ingest single message", func(t *testing.T) {
-		err := pipeline.Ingest(ctx, core.SpeakerTypeHuman, "Hello world")
+		err := pipeline.Ingest(ctx, core.SpeakerTypeHuman, []string{"Hello world"}, nil)
 		require.NoError(t, err)
 
 		// Give async processors time to complete
@@ -613,7 +613,7 @@ func TestPipeline_Ingest(t *testing.T) {
 	})
 
 	t.Run("ingest multiple messages", func(t *testing.T) {
-		err := pipeline.Ingest(ctx, core.SpeakerTypeAI, "Message 1", "Message 2", "Message 3")
+		err := pipeline.Ingest(ctx, core.SpeakerTypeAI, []string{"Message 1", "Message 2", "Message 3"}, nil)
 		require.NoError(t, err)
 
 		// Give async processors time to complete
@@ -621,8 +621,36 @@ func TestPipeline_Ingest(t *testing.T) {
 	})
 
 	t.Run("ingest with no messages", func(t *testing.T) {
-		err := pipeline.Ingest(ctx, core.SpeakerTypeHuman)
+		err := pipeline.Ingest(ctx, core.SpeakerTypeHuman, []string{}, nil)
 		require.NoError(t, err)
+	})
+
+	t.Run("ingest with metadata", func(t *testing.T) {
+		metadata := map[string]string{
+			"role":     "engineer",
+			"provider": "anthropic",
+		}
+		err := pipeline.Ingest(ctx, core.SpeakerTypeHuman, []string{"Test with metadata"}, &IngestOptions{
+			Metadata: metadata,
+		})
+		require.NoError(t, err)
+
+		// Give async processors time to complete
+		time.Sleep(100 * time.Millisecond)
+
+		// Verify metadata was stored
+		records, err := chatRepo.GetChatRecordsByDateRange(ctx, time.Now().Add(-1*time.Minute), time.Now().Add(1*time.Minute))
+		require.NoError(t, err)
+		var found *core.ChatRecord
+		for _, r := range records {
+			if r.Contents == "Test with metadata" {
+				found = r
+				break
+			}
+		}
+		require.NotNil(t, found, "should find record with metadata")
+		assert.Equal(t, "engineer", found.Metadata["role"])
+		assert.Equal(t, "anthropic", found.Metadata["provider"])
 	})
 }
 
