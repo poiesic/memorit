@@ -2,4 +2,3 @@ bin/
 *_db
 .claude
 *.txt
-**/*_mus.gen.go
