@@ -111,7 +111,8 @@ func setupTestConceptProcessor(t *testing.T) (*conceptProcessor, storage.ChatRep
 		responses: make(map[string][]ai.ExtractedConcept),
 	}
 
-	cp, err := newConceptProcessor(chatRepo, conceptRepo, embedder, extractor, nil)
+	// Use 0 window for tests to avoid context concatenation
+	cp, err := newConceptProcessor(chatRepo, conceptRepo, embedder, extractor, 0, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cp)
 

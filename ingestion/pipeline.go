@@ -21,6 +21,7 @@ type Pipeline struct {
 	conceptPool       *ants.Pool
 	embeddingProc     processor
 	conceptProc       processor
+	conceptWindow     time.Duration // Time window to look back for concept extraction context
 	logger            *slog.Logger
 }
 
@@ -73,6 +74,19 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
+// WithConceptWindowMinutes sets the time window for concept extraction context.
+// When extracting concepts from a message, includes messages from the last N minutes.
+// This provides context for terse messages and resolves anaphoric references.
+// Value is clamped to [0, 60] minutes. Default is 10 minutes.
+// A value of 0 means only the current message is used (no context).
+func WithConceptWindowMinutes(minutes int) Option {
+	return func(p *Pipeline) error {
+		duration := time.Duration(max(0, min(minutes, 60))) * time.Minute
+		p.conceptWindow = duration
+		return nil
+	}
+}
+
 // NewPipeline creates a new ingestion pipeline.
 func NewPipeline(
 	chatRepository storage.ChatRepository,
@@ -93,18 +107,6 @@ func NewPipeline(
 	// Default logger
 	logger := slog.Default()
 
-	// Create processors
-	embeddingProc, err := newEmbeddingProcessor(chatRepository, provider.Embedder(), logger)
-	if err != nil {
-		return nil, err
-	}
-
-	conceptProc, err := newConceptProcessor(chatRepository, conceptRepository,
-		provider.Embedder(), provider.ConceptExtractor(), logger)
-	if err != nil {
-		return nil, err
-	}
-
 	// Default pool size
 	poolSize := runtime.NumCPU() / 2
 	if poolSize < 1 {
@@ -122,23 +124,40 @@ func NewPipeline(
 		return nil, err
 	}
 
+	// Create pipeline with defaults
 	p := &Pipeline{
 		chatRepository:    chatRepository,
 		conceptRepository: conceptRepository,
 		embeddingPool:     embeddingPool,
 		conceptPool:       conceptsPool,
-		embeddingProc:     embeddingProc,
-		conceptProc:       conceptProc,
+		conceptWindow:     10 * time.Minute, // Default: 10 minutes
 		logger:            logger,
 	}
 
-	// Apply options
+	// Apply options (may override defaults)
 	for _, opt := range opts {
 		if err := opt(p); err != nil {
 			p.Release()
 			return nil, err
 		}
 	}
+
+	// Create processors after options are applied (so they get final config)
+	embeddingProc, err := newEmbeddingProcessor(chatRepository, provider.Embedder(), p.logger)
+	if err != nil {
+		p.Release()
+		return nil, err
+	}
+
+	conceptProc, err := newConceptProcessor(chatRepository, conceptRepository,
+		provider.Embedder(), provider.ConceptExtractor(), p.conceptWindow, p.logger)
+	if err != nil {
+		p.Release()
+		return nil, err
+	}
+
+	p.embeddingProc = embeddingProc
+	p.conceptProc = conceptProc
 
 	return p, nil
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
+	"time"
 
 	"github.com/poiesic/memorit/ai"
 	"github.com/poiesic/memorit/core"
@@ -41,6 +43,7 @@ type conceptProcessor struct {
 	conceptRepository storage.ConceptRepository
 	embedder          ai.Embedder
 	extractor         ai.ConceptExtractor
+	conceptWindow     time.Duration
 	lastID            core.ID
 	logger            *slog.Logger
 }
@@ -60,6 +63,7 @@ func newConceptProcessor(
 	conceptRepository storage.ConceptRepository,
 	embedder ai.Embedder,
 	extractor ai.ConceptExtractor,
+	conceptWindow time.Duration,
 	logger *slog.Logger,
 ) (processor, error) {
 	if chatRepository == nil {
@@ -82,8 +86,35 @@ func newConceptProcessor(
 		conceptRepository: conceptRepository,
 		embedder:          embedder,
 		extractor:         extractor,
+		conceptWindow:     conceptWindow,
 		logger:            logger.With("processor", "concepts"),
 	}, nil
+}
+
+// buildContextWindow builds the text context for concept extraction.
+// If conceptWindow > 0, fetches messages from the time window before the record
+// and concatenates them with the current record.
+// If conceptWindow == 0, returns only the current record's contents.
+func (cp *conceptProcessor) buildContextWindow(ctx context.Context, record *core.ChatRecord) (string, error) {
+	if cp.conceptWindow == 0 {
+		return record.Contents, nil
+	}
+
+	// Fetch messages from the time window before this record
+	windowStart := record.Timestamp.Add(-cp.conceptWindow)
+	contextRecords, err := cp.chatRepository.GetChatRecordsByDateRange(ctx, windowStart, record.Timestamp)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch context window: %w", err)
+	}
+
+	// Concatenate context messages + current message
+	var parts []string
+	for _, msg := range contextRecords {
+		parts = append(parts, msg.Contents)
+	}
+	parts = append(parts, record.Contents)
+
+	return strings.Join(parts, "\n\n"), nil
 }
 
 // process extracts concepts from the specified chat records and assigns them.
@@ -106,7 +137,15 @@ func (cp *conceptProcessor) process(ctx context.Context, ids ...core.ID) error {
 	var classificationErrors []error
 
 	for recordIdx, record := range records {
-		extracted, err := cp.extractor.ExtractConcepts(ctx, record.Contents)
+		// Build context window for this record
+		contextText, err := cp.buildContextWindow(ctx, record)
+		if err != nil {
+			classificationErrors = append(classificationErrors, fmt.Errorf("record %d context window failed: %w", recordIdx, err))
+			continue
+		}
+
+		// Extract concepts from the windowed context
+		extracted, err := cp.extractor.ExtractConcepts(ctx, contextText)
 		if err != nil {
 			classificationErrors = append(classificationErrors, fmt.Errorf("record %d classification failed: %w", recordIdx, err))
 			continue
