@@ -91,7 +91,7 @@ func (e *ConceptExtractor) ExtractConcepts(ctx context.Context, text string) ([]
 	var result analysis
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		response, err := e.client.GenerateContent(ctx, content, llms.WithTemperature(0.0))
+		response, err := e.client.GenerateContent(ctx, content, llms.WithTemperature(0.0), llms.WithJSONMode())
 		if err != nil {
 			e.logger.Error("failed to generate content", "attempt", attempt+1, "err", err)
 			return nil, err

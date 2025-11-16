@@ -38,7 +38,19 @@ const classificationResponseSchema = `{
   "additionalProperties": false
 }`
 
-const classificationPromptTemplate = `Extract the most important concepts from the given text and return them as JSON.
+const classificationPromptTemplate = `You are a concept extraction system. Your ONLY job is to identify and list specific concepts mentioned in text.
+
+CRITICAL RULES - WHAT NOT TO DO:
+- DO NOT write summaries of the text
+- DO NOT write descriptions or explanations
+- DO NOT write "This text is about..." or similar analysis
+- DO NOT describe the style, tone, or structure of the text
+- DO NOT provide commentary on the content
+- ONLY extract specific concepts that are explicitly mentioned
+
+If the text is creative, narrative, or unusual - STILL only extract concepts. Do not comment on the style.
+If the text is long - STILL only extract concepts. Do not summarize it.
+If the text seems like it needs summarization - IGNORE that instinct and only extract concepts.
 
 Output ONLY valid JSON which complies with the schema given below. Do not include any preamble, explanation,
 greeting, or acknowledgment. Start your response directly with the opening brace { and end with the closing
@@ -103,7 +115,23 @@ Input: "weather is nice today"
 Output:
 {
   "core_concepts": [
-    {"concept":"weather","type":"abstract concept","importance":6}
+    {"concept":"weather","type":"abstract_concept","importance":6}
+  ]
+}
+
+Example (long creative narrative - extract concepts, do NOT summarize):
+Input: "THE LEGEND OF THE SPACE FROG. Captain Jenkins was the best astronaut NASA ever had. One day he discovered a mysterious frog on Mars during his expedition. The frog could speak ancient Martian languages and knew secrets of the red planet. They became best friends and explored together, finding beautiful crystals in caves and ancient ruins from a lost civilization. They used special rovers to travel across the desert landscape. It was the most amazing discovery in human history. THE END."
+Output:
+{
+  "core_concepts": [
+    {"concept":"astronaut","type":"person","importance":8},
+    {"concept":"nasa","type":"organization","importance":6},
+    {"concept":"frog","type":"animal","importance":9},
+    {"concept":"mars","type":"place","importance":9},
+    {"concept":"crystal","type":"object","importance":5},
+    {"concept":"ruin","type":"building","importance":6},
+    {"concept":"rover","type":"object","importance":5},
+    {"concept":"civilization","type":"abstract_concept","importance":5}
   ]
 }`
 
