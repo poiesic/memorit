@@ -215,7 +215,7 @@ func (cp *conceptProcessor) process(ctx context.Context, ids ...core.ID) error {
 
 	names := make([]string, len(resolvedConcepts))
 	for i, c := range resolvedConcepts {
-		names[i] = c.Name
+		names[i] = c.Tuple()
 	}
 
 	cp.logger.Debug("Resolved concepts", "concepts", strings.Join(names, ","))
