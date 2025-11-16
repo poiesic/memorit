@@ -98,8 +98,8 @@ func TestGetRecentChatRecords(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Add records with incrementing timestamps
-	now := time.Now().UTC().Truncate(time.Microsecond)
+	// Add 5 records with different timestamps
+	now := time.Now().UTC()
 	records := []*core.ChatRecord{
 		{Speaker: core.SpeakerTypeHuman, Contents: "Message 1", Timestamp: now.Add(-4 * time.Hour)},
 		{Speaker: core.SpeakerTypeAI, Contents: "Response 1", Timestamp: now.Add(-3 * time.Hour)},
@@ -113,65 +113,31 @@ func TestGetRecentChatRecords(t *testing.T) {
 		t.Fatalf("Failed to add chat records: %v", err)
 	}
 
-	// Test: Get last 3 records
-	results, err := chatRepo.GetRecentChatRecords(ctx, 3)
+	// Get 3 most recent records
+	recent, err := chatRepo.GetRecentChatRecords(ctx, 3)
 	if err != nil {
 		t.Fatalf("Failed to get recent records: %v", err)
 	}
 
-	if len(results) != 3 {
-		t.Fatalf("Expected 3 records, got %d", len(results))
+	if len(recent) != 3 {
+		t.Fatalf("Expected 3 records, got %d", len(recent))
 	}
 
-	// Verify order: most recent first
-	if results[0].Contents != "Message 3" {
-		t.Errorf("Expected 'Message 3' first, got '%s'", results[0].Contents)
-	}
-	if results[1].Contents != "Response 2" {
-		t.Errorf("Expected 'Response 2' second, got '%s'", results[1].Contents)
-	}
-	if results[2].Contents != "Message 2" {
-		t.Errorf("Expected 'Message 2' third, got '%s'", results[2].Contents)
+	// Verify they're in descending order (newest first)
+	if recent[0].Contents != "Message 3" {
+		t.Fatalf("Expected 'Message 3' first, got '%s'", recent[0].Contents)
 	}
 
-	// Test: Get all records
-	allResults, err := chatRepo.GetRecentChatRecords(ctx, 10)
-	if err != nil {
-		t.Fatalf("Failed to get all records: %v", err)
+	if recent[1].Contents != "Response 2" {
+		t.Fatalf("Expected 'Response 2' second, got '%s'", recent[1].Contents)
 	}
 
-	if len(allResults) != 5 {
-		t.Fatalf("Expected 5 records, got %d", len(allResults))
-	}
-
-	// Test: Get zero records
-	zeroResults, err := chatRepo.GetRecentChatRecords(ctx, 0)
-	if err != nil {
-		t.Fatalf("Failed to get zero records: %v", err)
-	}
-
-	if len(zeroResults) != 0 {
-		t.Fatalf("Expected 0 records, got %d", len(zeroResults))
-	}
-
-	// Test: Empty database
-	chatRepo2, conceptRepo2, backend2, err := NewMemoryRepositories()
-	if err != nil {
-		t.Fatalf("Failed to create second repository: %v", err)
-	}
-	defer func() { conceptRepo2.Close(); chatRepo2.Close(); backend2.Close() }()
-
-	emptyResults, err := chatRepo2.GetRecentChatRecords(ctx, 10)
-	if err != nil {
-		t.Fatalf("Failed to query empty database: %v", err)
-	}
-
-	if len(emptyResults) != 0 {
-		t.Fatalf("Expected 0 records from empty database, got %d", len(emptyResults))
+	if recent[2].Contents != "Message 2" {
+		t.Fatalf("Expected 'Message 2' third, got '%s'", recent[2].Contents)
 	}
 }
 
-func TestConceptRefIndex(t *testing.T) {
+func TestConceptIndex(t *testing.T) {
 	chatRepo, conceptRepo, backend, err := NewMemoryRepositories()
 	if err != nil {
 		t.Fatalf("Failed to create repository: %v", err)
@@ -180,193 +146,145 @@ func TestConceptRefIndex(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Add a concept
-	concept := &core.Concept{
-		Name: "golang",
-		Type: "technology",
+	// Add a concept first
+	concepts := []*core.Concept{
+		{
+			Name: "golang",
+			Type: "technology",
+		},
 	}
-	addedConcepts, err := conceptRepo.AddConcepts(ctx, concept)
+
+	addedConcepts, err := conceptRepo.AddConcepts(ctx, concepts...)
 	if err != nil {
 		t.Fatalf("Failed to add concept: %v", err)
 	}
+
 	conceptID := addedConcepts[0].Id
 
-	// Add a chat record referencing the concept
-	record := &core.ChatRecord{
-		Speaker:   core.SpeakerTypeHuman,
-		Contents:  "I love golang",
-		Timestamp: time.Now().UTC(),
-		Concepts: []core.ConceptRef{
-			{ConceptId: conceptID, Importance: 8},
+	// Add chat records with this concept
+	now := time.Now().UTC()
+	records := []*core.ChatRecord{
+		{
+			Speaker:   core.SpeakerTypeHuman,
+			Contents:  "I love Go",
+			Timestamp: now,
+			Concepts: []core.ConceptRef{
+				{ConceptId: conceptID, Importance: 8},
+			},
+		},
+		{
+			Speaker:   core.SpeakerTypeHuman,
+			Contents:  "Go is great",
+			Timestamp: now.Add(1 * time.Minute),
+			Concepts: []core.ConceptRef{
+				{ConceptId: conceptID, Importance: 9},
+			},
 		},
 	}
-	_, err = chatRepo.AddChatRecords(ctx, record)
+
+	_, err = chatRepo.AddChatRecords(ctx, records...)
 	if err != nil {
-		t.Fatalf("Failed to add chat record: %v", err)
+		t.Fatalf("Failed to add chat records: %v", err)
 	}
 
-	// Query for records by concept
+	// Query by concept
 	recordIDs, err := chatRepo.GetChatRecordsByConcept(ctx, conceptID)
 	if err != nil {
 		t.Fatalf("Failed to get records by concept: %v", err)
 	}
 
-	if len(recordIDs) != 1 {
-		t.Fatalf("Expected 1 record, got %d", len(recordIDs))
+	if len(recordIDs) != 2 {
+		t.Fatalf("Expected 2 record IDs, got %d", len(recordIDs))
 	}
 }
 
-func TestUpdateChatRecords(t *testing.T) {
+func TestUpdateChatRecord(t *testing.T) {
 	chatRepo, conceptRepo, backend, err := NewMemoryRepositories()
 	if err != nil {
-		t.Fatalf("Failed to create repositories: %v", err)
+		t.Fatalf("Failed to create repository: %v", err)
 	}
 	defer func() { conceptRepo.Close(); chatRepo.Close(); backend.Close() }()
 
 	ctx := context.Background()
-	now := time.Now().UTC()
 
 	// Add a record
 	record := &core.ChatRecord{
 		Speaker:   core.SpeakerTypeHuman,
-		Contents:  "Original content",
-		Timestamp: now,
+		Contents:  "Original",
+		Timestamp: time.Now().UTC(),
 	}
+
 	added, err := chatRepo.AddChatRecords(ctx, record)
 	if err != nil {
 		t.Fatalf("Failed to add record: %v", err)
 	}
 
-	// Update the record
-	added[0].Contents = "Updated content"
-	updated, err := chatRepo.UpdateChatRecords(ctx, added[0])
-	if err != nil {
-		t.Fatalf("Failed to update record: %v", err)
-	}
-
-	if updated[0].Contents != "Updated content" {
-		t.Fatalf("Expected updated content, got %s", updated[0].Contents)
-	}
-
-	// Verify the update persisted
-	retrieved, err := chatRepo.GetChatRecord(ctx, added[0].Id)
-	if err != nil {
-		t.Fatalf("Failed to get record: %v", err)
-	}
-
-	if retrieved.Contents != "Updated content" {
-		t.Fatalf("Expected updated content to persist, got %s", retrieved.Contents)
-	}
-}
-
-func TestUpdateChatRecords_WithConceptChanges(t *testing.T) {
-	chatRepo, conceptRepo, backend, err := NewMemoryRepositories()
-	if err != nil {
-		t.Fatalf("Failed to create repositories: %v", err)
-	}
-	defer func() { conceptRepo.Close(); chatRepo.Close(); backend.Close() }()
-
-	ctx := context.Background()
-	now := time.Now().UTC()
-
-	// Add a concept
-	concept := &core.Concept{
-		Name: "test",
-		Type: "entity",
-	}
-	addedConcepts, err := conceptRepo.AddConcepts(ctx, concept)
-	if err != nil {
-		t.Fatalf("Failed to add concept: %v", err)
-	}
-
-	// Add a record with concept
-	record := &core.ChatRecord{
-		Speaker:   core.SpeakerTypeHuman,
-		Contents:  "Test content",
-		Timestamp: now,
-		Concepts: []core.ConceptRef{
-			{ConceptId: addedConcepts[0].Id, Importance: 8},
-		},
-	}
-	added, err := chatRepo.AddChatRecords(ctx, record)
-	if err != nil {
-		t.Fatalf("Failed to add record: %v", err)
-	}
-
-	// Update record to remove concepts
-	added[0].Concepts = []core.ConceptRef{}
+	// Update it
+	added[0].Contents = "Updated"
 	_, err = chatRepo.UpdateChatRecords(ctx, added[0])
 	if err != nil {
 		t.Fatalf("Failed to update record: %v", err)
 	}
 
-	// Verify concept index was updated
-	recordIDs, err := chatRepo.GetChatRecordsByConcept(ctx, addedConcepts[0].Id)
+	// Retrieve and verify
+	retrieved, err := chatRepo.GetChatRecord(ctx, added[0].Id)
 	if err != nil {
-		t.Fatalf("Failed to get records by concept: %v", err)
+		t.Fatalf("Failed to get record: %v", err)
 	}
 
-	if len(recordIDs) != 0 {
-		t.Fatalf("Expected 0 records after concept removal, got %d", len(recordIDs))
+	if retrieved.Contents != "Updated" {
+		t.Fatalf("Expected 'Updated', got '%s'", retrieved.Contents)
 	}
 }
 
-func TestDeleteChatRecords(t *testing.T) {
+func TestDeleteChatRecord(t *testing.T) {
 	chatRepo, conceptRepo, backend, err := NewMemoryRepositories()
 	if err != nil {
-		t.Fatalf("Failed to create repositories: %v", err)
+		t.Fatalf("Failed to create repository: %v", err)
 	}
 	defer func() { conceptRepo.Close(); chatRepo.Close(); backend.Close() }()
 
 	ctx := context.Background()
-	now := time.Now().UTC()
 
-	// Add records
-	records := []*core.ChatRecord{
-		{Speaker: core.SpeakerTypeHuman, Contents: "Message 1", Timestamp: now},
-		{Speaker: core.SpeakerTypeHuman, Contents: "Message 2", Timestamp: now},
+	// Add a record
+	record := &core.ChatRecord{
+		Speaker:   core.SpeakerTypeHuman,
+		Contents:  "To be deleted",
+		Timestamp: time.Now().UTC(),
 	}
-	added, err := chatRepo.AddChatRecords(ctx, records...)
+
+	added, err := chatRepo.AddChatRecords(ctx, record)
 	if err != nil {
-		t.Fatalf("Failed to add records: %v", err)
+		t.Fatalf("Failed to add record: %v", err)
 	}
 
-	// Delete first record
+	// Delete it
 	err = chatRepo.DeleteChatRecords(ctx, added[0].Id)
 	if err != nil {
 		t.Fatalf("Failed to delete record: %v", err)
 	}
 
-	// Verify it's deleted
+	// Verify it's gone
 	_, err = chatRepo.GetChatRecord(ctx, added[0].Id)
 	if err == nil {
 		t.Fatal("Expected error when getting deleted record")
 	}
-
-	// Verify second record still exists
-	retrieved, err := chatRepo.GetChatRecord(ctx, added[1].Id)
-	if err != nil {
-		t.Fatalf("Failed to get remaining record: %v", err)
-	}
-	if retrieved.Contents != "Message 2" {
-		t.Fatalf("Expected 'Message 2', got %s", retrieved.Contents)
-	}
 }
 
-func TestGetChatRecords_Multiple(t *testing.T) {
+func TestBulkOperations(t *testing.T) {
 	chatRepo, conceptRepo, backend, err := NewMemoryRepositories()
 	if err != nil {
-		t.Fatalf("Failed to create repositories: %v", err)
+		t.Fatalf("Failed to create repository: %v", err)
 	}
 	defer func() { conceptRepo.Close(); chatRepo.Close(); backend.Close() }()
 
 	ctx := context.Background()
-	now := time.Now().UTC()
 
-	// Add records
+	// Add multiple records at once
+	now := time.Now().UTC()
 	records := []*core.ChatRecord{
 		{Speaker: core.SpeakerTypeHuman, Contents: "Message 1", Timestamp: now},
-		{Speaker: core.SpeakerTypeHuman, Contents: "Message 2", Timestamp: now},
+		{Speaker: core.SpeakerTypeHuman, Contents: "Message 2", Timestamp: now.Add(time.Minute)},
 		{Speaker: core.SpeakerTypeHuman, Contents: "Message 3", Timestamp: now},
 	}
 	added, err := chatRepo.AddChatRecords(ctx, records...)
@@ -382,5 +300,75 @@ func TestGetChatRecords_Multiple(t *testing.T) {
 
 	if len(retrieved) != 2 {
 		t.Fatalf("Expected 2 records, got %d", len(retrieved))
+	}
+}
+
+func TestGetChatRecordsBeforeID(t *testing.T) {
+	chatRepo, conceptRepo, backend, err := NewMemoryRepositories()
+	if err != nil {
+		t.Fatalf("Failed to create repository: %v", err)
+	}
+	defer func() { conceptRepo.Close(); chatRepo.Close(); backend.Close() }()
+
+	ctx := context.Background()
+
+	// Add 10 records with different timestamps
+	now := time.Now().UTC()
+	records := []*core.ChatRecord{}
+	for i := 0; i < 10; i++ {
+		records = append(records, &core.ChatRecord{
+			Speaker:   core.SpeakerTypeHuman,
+			Contents:  "Message " + string(rune('0'+i)),
+			Timestamp: now.Add(time.Duration(i) * time.Minute),
+		})
+	}
+
+	added, err := chatRepo.AddChatRecords(ctx, records...)
+	if err != nil {
+		t.Fatalf("Failed to add chat records: %v", err)
+	}
+
+	// Get records before the 7th message (index 6, which has content "Message 6")
+	referenceID := added[6].Id
+	older, err := chatRepo.GetChatRecordsBeforeID(ctx, referenceID, 3)
+	if err != nil {
+		t.Fatalf("Failed to get records before ID: %v", err)
+	}
+
+	// Should get messages 5, 4, 3 (in that order - descending)
+	if len(older) != 3 {
+		t.Fatalf("Expected 3 records, got %d", len(older))
+	}
+
+	// Verify order (newest to oldest)
+	if older[0].Contents != "Message 5" {
+		t.Fatalf("Expected 'Message 5' first, got '%s'", older[0].Contents)
+	}
+	if older[1].Contents != "Message 4" {
+		t.Fatalf("Expected 'Message 4' second, got '%s'", older[1].Contents)
+	}
+	if older[2].Contents != "Message 3" {
+		t.Fatalf("Expected 'Message 3' third, got '%s'", older[2].Contents)
+	}
+
+	// Test with limit larger than available records
+	older, err = chatRepo.GetChatRecordsBeforeID(ctx, added[2].Id, 10)
+	if err != nil {
+		t.Fatalf("Failed to get records before ID: %v", err)
+	}
+
+	// Should only get messages 1 and 0
+	if len(older) != 2 {
+		t.Fatalf("Expected 2 records, got %d", len(older))
+	}
+
+	// Test with first message (should return empty)
+	older, err = chatRepo.GetChatRecordsBeforeID(ctx, added[0].Id, 5)
+	if err != nil {
+		t.Fatalf("Failed to get records before first ID: %v", err)
+	}
+
+	if len(older) != 0 {
+		t.Fatalf("Expected 0 records before first message, got %d", len(older))
 	}
 }

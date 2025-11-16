@@ -315,6 +315,85 @@ func (r *ChatRepository) GetRecentChatRecords(ctx context.Context, limit int) ([
 	return results, err
 }
 
+// GetChatRecordsBeforeID retrieves chat records that occurred before the specified record ID,
+// ordered by timestamp descending (newest first). This is used for lazy loading older messages.
+func (r *ChatRepository) GetChatRecordsBeforeID(ctx context.Context, beforeID core.ID, limit int) ([]*core.ChatRecord, error) {
+	var results []*core.ChatRecord
+
+	err := r.backend.WithTx(func(tx *badger.Txn) error {
+		// First, get the reference record to find its timestamp
+		refKey := makeChatRecordKey(beforeID)
+		refRecord, err := r.readChatRecord(tx, refKey)
+		if err != nil {
+			return err
+		}
+		if refRecord == nil {
+			return storage.ErrNotFound
+		}
+
+		// Use reverse iterator to go backwards in time from this record
+		opts := badger.DefaultIteratorOptions
+		opts.Reverse = true
+
+		iter := tx.NewIterator(opts)
+		defer iter.Close()
+
+		// Start seeking from the reference record's date key
+		// This will position us at or just before this record
+		startKey := makeChatDateKey(refRecord.Timestamp, beforeID)
+
+		// Prefix for chat date index keys
+		prefix := []byte(chatRecordDatePrefix + ":")
+
+		count := 0
+		foundRef := false
+
+		for iter.Seek(startKey); iter.Valid() && count < limit; iter.Next() {
+			key := iter.Item().Key()
+
+			// Check if we're still in the chat date index
+			if len(key) < len(prefix) || slices.Compare(key[:len(prefix)], prefix) != 0 {
+				break
+			}
+
+			// Read the ID from the index
+			var recordID core.ID
+			if err := iter.Item().Value(func(val []byte) error {
+				var err error
+				recordID, err = storage.UnmarshalID(val)
+				return err
+			}); err != nil {
+				return err
+			}
+
+			// Skip the reference record itself
+			if recordID == beforeID {
+				foundRef = true
+				continue
+			}
+
+			// Only include records after we've passed the reference
+			if !foundRef {
+				continue
+			}
+
+			// Look up the full record
+			recordKey := makeChatRecordKey(recordID)
+			record, err := r.readChatRecord(tx, recordKey)
+			if err != nil {
+				return err
+			}
+			if record != nil {
+				results = append(results, record)
+				count++
+			}
+		}
+		return nil
+	}, false)
+
+	return results, err
+}
+
 // GetChatRecordsByConcept retrieves IDs of chat records associated with a concept.
 func (r *ChatRepository) GetChatRecordsByConcept(ctx context.Context, conceptID core.ID) ([]core.ID, error) {
 	var recordIDs []core.ID

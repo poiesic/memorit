@@ -60,6 +60,11 @@ type ChatRepository interface {
 	// Returns up to limit records, with the most recent first.
 	GetRecentChatRecords(ctx context.Context, limit int) ([]*core.ChatRecord, error)
 
+	// GetChatRecordsBeforeID retrieves chat records that occurred before the specified record ID,
+	// ordered by timestamp descending (newest first). Used for lazy loading older messages.
+	// Returns up to limit records. Returns ErrNotFound if beforeID doesn't exist.
+	GetChatRecordsBeforeID(ctx context.Context, beforeID core.ID, limit int) ([]*core.ChatRecord, error)
+
 	// GetChatRecordsByConcept retrieves IDs of chat records associated with a concept.
 	// Returns only record IDs, not full records.
 	GetChatRecordsByConcept(ctx context.Context, conceptID core.ID) ([]core.ID, error)
