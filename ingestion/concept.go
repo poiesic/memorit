@@ -213,6 +213,13 @@ func (cp *conceptProcessor) process(ctx context.Context, ids ...core.ID) error {
 		}
 	}
 
+	names := make([]string, len(resolvedConcepts))
+	for i, c := range resolvedConcepts {
+		names[i] = c.Name
+	}
+
+	cp.logger.Debug("Resolved concepts", "concepts", strings.Join(names, ","))
+
 	// Step 3: Distribute concepts back to records using the mapping
 	for _, resolvedConcept := range resolvedConcepts {
 		positions := conceptMapping[resolvedConcept.Id]
