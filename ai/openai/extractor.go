@@ -160,5 +160,8 @@ func (e *ConceptExtractor) ExtractConcepts(ctx context.Context, text string) ([]
 		"total", len(result.CoreConcepts),
 		"filtered", len(extracted))
 
+	for i, c := range extracted {
+		extracted[i].Type = strings.ReplaceAll(c.Type, " ", "_")
+	}
 	return extracted, nil
 }
