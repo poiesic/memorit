@@ -29,9 +29,10 @@ func (c concept) Tuple() string {
 
 // fromExtractedConcept converts ai.ExtractedConcept to internal concept type.
 func fromExtractedConcept(ec ai.ExtractedConcept) concept {
+	correctedType := strings.ReplaceAll(ec.Type, " ", "_")
 	return concept{
 		Concept:    ec.Name,
-		Type:       ec.Type,
+		Type:       correctedType,
 		Importance: ec.Importance,
 	}
 }
