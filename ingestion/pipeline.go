@@ -21,7 +21,7 @@ type Pipeline struct {
 	conceptPool       *ants.Pool
 	embeddingProc     processor
 	conceptProc       processor
-	conceptWindow     time.Duration // Time window to look back for concept extraction context
+	contextTurns      int // Number of previous turns to include for concept extraction context
 	logger            *slog.Logger
 }
 
@@ -74,15 +74,16 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
-// WithConceptWindowMinutes sets the time window for concept extraction context.
-// When extracting concepts from a message, includes messages from the last N minutes.
+// WithContextTurns sets the number of previous turns to include for concept extraction context.
+// When extracting concepts from a message, includes up to N previous turns of conversation.
+// A "turn" typically consists of 2 messages (user + assistant), so contextTurns=2 means
+// up to 4 previous messages will be included for context.
 // This provides context for terse messages and resolves anaphoric references.
-// Value is clamped to [0, 60] minutes. Default is 10 minutes.
+// Value is clamped to [0, 10] turns. Default is 2 turns.
 // A value of 0 means only the current message is used (no context).
-func WithConceptWindowMinutes(minutes int) Option {
+func WithContextTurns(turns int) Option {
 	return func(p *Pipeline) error {
-		duration := time.Duration(max(0, min(minutes, 60))) * time.Minute
-		p.conceptWindow = duration
+		p.contextTurns = max(0, min(turns, 10))
 		return nil
 	}
 }
@@ -130,7 +131,7 @@ func NewPipeline(
 		conceptRepository: conceptRepository,
 		embeddingPool:     embeddingPool,
 		conceptPool:       conceptsPool,
-		conceptWindow:     10 * time.Minute, // Default: 10 minutes
+		contextTurns:      2, // Default: 2 turns (up to 4 previous messages)
 		logger:            logger,
 	}
 
@@ -150,7 +151,7 @@ func NewPipeline(
 	}
 
 	conceptProc, err := newConceptProcessor(chatRepository, conceptRepository,
-		provider.Embedder(), provider.ConceptExtractor(), p.conceptWindow, p.logger)
+		provider.Embedder(), provider.ConceptExtractor(), p.contextTurns, p.logger)
 	if err != nil {
 		p.Release()
 		return nil, err

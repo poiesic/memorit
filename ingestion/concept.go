@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/poiesic/memorit/ai"
 	"github.com/poiesic/memorit/core"
@@ -43,7 +42,7 @@ type conceptProcessor struct {
 	conceptRepository storage.ConceptRepository
 	embedder          ai.Embedder
 	extractor         ai.ConceptExtractor
-	conceptWindow     time.Duration
+	contextTurns      int // Number of previous turns to include for context (0 = current message only)
 	lastID            core.ID
 	logger            *slog.Logger
 }
@@ -63,7 +62,7 @@ func newConceptProcessor(
 	conceptRepository storage.ConceptRepository,
 	embedder ai.Embedder,
 	extractor ai.ConceptExtractor,
-	conceptWindow time.Duration,
+	contextTurns int,
 	logger *slog.Logger,
 ) (processor, error) {
 	if chatRepository == nil {
@@ -86,25 +85,50 @@ func newConceptProcessor(
 		conceptRepository: conceptRepository,
 		embedder:          embedder,
 		extractor:         extractor,
-		conceptWindow:     conceptWindow,
+		contextTurns:      contextTurns,
 		logger:            logger.With("processor", "concepts"),
 	}, nil
 }
 
 // buildContextWindow builds the text context for concept extraction.
-// If conceptWindow > 0, fetches messages from the time window before the record
+// If contextTurns > 0, fetches the most recent messages before the current record
 // and concatenates them with the current record.
-// If conceptWindow == 0, returns only the current record's contents.
+// A "turn" is a single message exchange, so contextTurns=2 means include up to 4 previous messages
+// (2 turns = 2 user + 2 assistant messages, though the actual count may vary).
+// If contextTurns == 0, returns only the current record's contents.
 func (cp *conceptProcessor) buildContextWindow(ctx context.Context, record *core.ChatRecord) (string, error) {
-	if cp.conceptWindow == 0 {
+	if cp.contextTurns == 0 {
 		return record.Contents, nil
 	}
 
-	// Fetch messages from the time window before this record
-	windowStart := record.Timestamp.Add(-cp.conceptWindow)
-	contextRecords, err := cp.chatRepository.GetChatRecordsByDateRange(ctx, windowStart, record.Timestamp)
+	// Fetch recent messages to build context
+	// We fetch more than we need to ensure we can find messages before the current one
+	// contextTurns * 2 gives us enough headroom (2 messages per turn)
+	limit := cp.contextTurns * 2
+	recentRecords, err := cp.chatRepository.GetRecentChatRecords(ctx, limit+10) // +10 buffer for safety
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch context window: %w", err)
+		return "", fmt.Errorf("failed to fetch recent records: %w", err)
+	}
+
+	// Find messages that come before the current record and take the last N
+	var contextRecords []*core.ChatRecord
+	for _, msg := range recentRecords {
+		// Only include messages that are strictly before the current record (by timestamp)
+		if msg.Timestamp.Before(record.Timestamp) {
+			contextRecords = append(contextRecords, msg)
+		}
+	}
+
+	// Reverse the context records so they're in chronological order (oldest first)
+	// GetRecentChatRecords returns newest first, we want oldest first for context
+	for i, j := 0, len(contextRecords)-1; i < j; i, j = i+1, j-1 {
+		contextRecords[i], contextRecords[j] = contextRecords[j], contextRecords[i]
+	}
+
+	// Take only the last N messages (most recent before current)
+	maxMessages := cp.contextTurns * 2
+	if len(contextRecords) > maxMessages {
+		contextRecords = contextRecords[len(contextRecords)-maxMessages:]
 	}
 
 	// Concatenate context messages + current message
