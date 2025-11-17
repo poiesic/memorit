@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/poiesic/memorit/core"
+	"github.com/stretchr/testify/require"
 )
 
 func TestChatRecordBasics(t *testing.T) {
@@ -371,4 +372,190 @@ func TestGetChatRecordsBeforeID(t *testing.T) {
 	if len(older) != 0 {
 		t.Fatalf("Expected 0 records before first message, got %d", len(older))
 	}
+}
+
+func TestGetConceptsByDateRange(t *testing.T) {
+	chatRepo, conceptRepo, backend, err := NewMemoryRepositories()
+	require.NoError(t, err, "Failed to create repositories")
+	defer func() {
+		conceptRepo.Close()
+		chatRepo.Close()
+		backend.Close()
+	}()
+
+	ctx := context.Background()
+
+	// Create test concepts
+	concepts := []*core.Concept{
+		{Name: "golang", Type: "technology"},
+		{Name: "database", Type: "technology"},
+		{Name: "testing", Type: "practice"},
+	}
+
+	addedConcepts, err := conceptRepo.AddConcepts(ctx, concepts...)
+	require.NoError(t, err, "Failed to add concepts")
+	require.Len(t, addedConcepts, 3)
+
+	golangID := addedConcepts[0].Id
+	databaseID := addedConcepts[1].Id
+	testingID := addedConcepts[2].Id
+
+	// Create chat records with different timestamps and concepts
+	now := time.Now().UTC()
+	records := []*core.ChatRecord{
+		{
+			Speaker:   core.SpeakerTypeHuman,
+			Contents:  "I love Go programming",
+			Timestamp: now.Add(-3 * time.Hour),
+			Concepts: []core.ConceptRef{
+				{ConceptId: golangID, Importance: 9},
+			},
+		},
+		{
+			Speaker:   core.SpeakerTypeHuman,
+			Contents:  "Working with databases in Go",
+			Timestamp: now.Add(-2 * time.Hour),
+			Concepts: []core.ConceptRef{
+				{ConceptId: golangID, Importance: 7},
+				{ConceptId: databaseID, Importance: 8},
+			},
+		},
+		{
+			Speaker:   core.SpeakerTypeHuman,
+			Contents:  "Writing tests is important",
+			Timestamp: now.Add(-1 * time.Hour),
+			Concepts: []core.ConceptRef{
+				{ConceptId: testingID, Importance: 10},
+			},
+		},
+		{
+			Speaker:   core.SpeakerTypeHuman,
+			Contents:  "Another message about Go",
+			Timestamp: now,
+			Concepts: []core.ConceptRef{
+				{ConceptId: golangID, Importance: 8},
+			},
+		},
+		{
+			Speaker:   core.SpeakerTypeHuman,
+			Contents:  "Message with no concepts",
+			Timestamp: now.Add(-30 * time.Minute),
+		},
+	}
+
+	_, err = chatRepo.AddChatRecords(ctx, records...)
+	require.NoError(t, err, "Failed to add chat records")
+
+	t.Run("returns unique concepts from messages in date range", func(t *testing.T) {
+		// Query for records from last 2.5 hours (should include records at -2h, -1h, and -30min)
+		start := now.Add(-150 * time.Minute)
+		end := now.Add(1 * time.Minute)
+
+		results, err := chatRepo.GetConceptsByDateRange(ctx, start, end)
+		require.NoError(t, err, "Failed to get concepts by date range")
+
+		// Should get golang, database, and testing concepts (deduplicated)
+		require.Len(t, results, 3, "Expected 3 unique concepts")
+
+		// Verify we got the right concepts
+		conceptIDs := make(map[core.ID]bool)
+		for _, c := range results {
+			conceptIDs[c.Id] = true
+		}
+
+		require.True(t, conceptIDs[golangID], "Expected golang concept")
+		require.True(t, conceptIDs[databaseID], "Expected database concept")
+		require.True(t, conceptIDs[testingID], "Expected testing concept")
+	})
+
+	t.Run("deduplicates concepts appearing in multiple messages", func(t *testing.T) {
+		// Query for all records (golang appears in 3 different messages)
+		start := now.Add(-4 * time.Hour)
+		end := now.Add(1 * time.Hour)
+
+		results, err := chatRepo.GetConceptsByDateRange(ctx, start, end)
+		require.NoError(t, err, "Failed to get concepts by date range")
+
+		// Should get 3 unique concepts even though golang appears 3 times
+		require.Len(t, results, 3, "Expected 3 unique concepts")
+
+		// Count how many times we see the golang concept (should be exactly once)
+		golangCount := 0
+		for _, c := range results {
+			if c.Id == golangID {
+				golangCount++
+				require.Equal(t, "golang", c.Name)
+				require.Equal(t, "technology", c.Type)
+			}
+		}
+		require.Equal(t, 1, golangCount, "golang concept should appear exactly once")
+	})
+
+	t.Run("returns empty when no records in date range", func(t *testing.T) {
+		// Query for a time range with no records
+		start := now.Add(-10 * time.Hour)
+		end := now.Add(-9 * time.Hour)
+
+		results, err := chatRepo.GetConceptsByDateRange(ctx, start, end)
+		require.NoError(t, err, "Failed to get concepts by date range")
+		require.Empty(t, results, "Expected no concepts in empty date range")
+	})
+
+	t.Run("handles records without concepts", func(t *testing.T) {
+		// Query for range that includes the message with no concepts
+		start := now.Add(-45 * time.Minute)
+		end := now.Add(-15 * time.Minute)
+
+		results, err := chatRepo.GetConceptsByDateRange(ctx, start, end)
+		require.NoError(t, err, "Failed to get concepts by date range")
+		require.Empty(t, results, "Expected no concepts when messages have no concepts")
+	})
+
+	t.Run("handles equal start and end times", func(t *testing.T) {
+		// When start == end, implementation adds 1 microsecond to end
+		exactTime := now.Add(-2 * time.Hour)
+
+		results, err := chatRepo.GetConceptsByDateRange(ctx, exactTime, exactTime)
+		require.NoError(t, err, "Failed to get concepts with equal start and end")
+
+		// This is testing the edge case handling in the implementation
+		// Since we add 1 microsecond, and our record is at exactly -2h,
+		// it should include that record
+		require.NotEmpty(t, results, "Expected to find concepts when start equals end")
+	})
+
+	t.Run("returns concepts with full details", func(t *testing.T) {
+		start := now.Add(-3 * time.Hour)
+		end := now.Add(-90 * time.Minute)
+
+		results, err := chatRepo.GetConceptsByDateRange(ctx, start, end)
+		require.NoError(t, err, "Failed to get concepts by date range")
+
+		// Should get golang and database concepts
+		require.Len(t, results, 2, "Expected 2 concepts")
+
+		// Verify concepts have all their details
+		for _, c := range results {
+			require.NotZero(t, c.Id, "Concept ID should be set")
+			require.NotEmpty(t, c.Name, "Concept name should be set")
+			require.NotEmpty(t, c.Type, "Concept type should be set")
+			require.NotZero(t, c.InsertedAt, "InsertedAt should be set")
+			require.NotZero(t, c.UpdatedAt, "UpdatedAt should be set")
+		}
+	})
+
+	t.Run("respects date range boundaries", func(t *testing.T) {
+		// Query for exactly the range containing only the -1h message
+		start := now.Add(-90 * time.Minute)
+		end := now.Add(-30 * time.Minute)
+
+		results, err := chatRepo.GetConceptsByDateRange(ctx, start, end)
+		require.NoError(t, err, "Failed to get concepts by date range")
+
+		// Should only get the testing concept
+		require.Len(t, results, 1, "Expected 1 concept")
+		require.Equal(t, testingID, results[0].Id)
+		require.Equal(t, "testing", results[0].Name)
+		require.Equal(t, "practice", results[0].Type)
+	})
 }

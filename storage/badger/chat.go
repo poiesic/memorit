@@ -430,6 +430,38 @@ func (r *ChatRepository) GetChatRecordsByConcept(ctx context.Context, conceptID 
 	return recordIDs, err
 }
 
+// GetConceptsByDateRange returns concepts referenced in messages falling within a date range
+func (r *ChatRepository) GetConceptsByDateRange(ctx context.Context, start, end time.Time) ([]*core.Concept, error) {
+	records, err := r.GetChatRecordsByDateRange(ctx, start, end)
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[core.ID]bool)
+	for _, r := range records {
+		for _, c := range r.Concepts {
+			_, exists := ids[c.ConceptId]
+			if !exists {
+				ids[c.ConceptId] = true
+			}
+		}
+	}
+	var result []*core.Concept
+	err = r.backend.WithTx(func(tx *badger.Txn) error {
+		for id := range ids {
+			key := makeConceptKey(id)
+			concept, err := readConcept(tx, key)
+			if err != nil {
+				return err
+			}
+			if concept != nil {
+				result = append(result, concept)
+			}
+		}
+		return nil
+	}, false)
+	return result, err
+}
+
 // Helper methods
 
 // readChatRecord reads a chat record from the transaction.

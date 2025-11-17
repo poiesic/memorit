@@ -28,6 +28,7 @@ func newEmbedder(config *ai.Config) (*Embedder, error) {
 		openai.WithBaseURL(config.EmbeddingHost),
 		openai.WithToken("none"),
 		openai.WithEmbeddingModel(config.EmbeddingModel),
+		openai.WithEmbeddingDimensions(512),
 	)
 	if err != nil {
 		return nil, err

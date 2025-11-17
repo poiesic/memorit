@@ -68,6 +68,11 @@ type ChatRepository interface {
 	// GetChatRecordsByConcept retrieves IDs of chat records associated with a concept.
 	// Returns only record IDs, not full records.
 	GetChatRecordsByConcept(ctx context.Context, conceptID core.ID) ([]core.ID, error)
+
+	// GetConceptsByDateRange retrieves de-duplicated list of concepts
+	// referenced by chat messages within a date range
+	// Returns start <= Timestamp < end, ordered by timestamp.
+	GetConceptsByDateRange(ctx context.Context, start, end time.Time) ([]*core.Concept, error)
 }
 
 // ConceptRepository provides operations for managing concepts.

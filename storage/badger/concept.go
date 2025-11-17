@@ -77,7 +77,7 @@ func (r *ConceptRepository) UpdateConcepts(ctx context.Context, concepts ...*cor
 			key := makeConceptKey(concept.Id)
 
 			// Read old concept to detect changes
-			old, err := r.readConcept(tx, key)
+			old, err := readConcept(tx, key)
 			if err != nil {
 				return err
 			}
@@ -119,7 +119,7 @@ func (r *ConceptRepository) DeleteConcepts(ctx context.Context, ids ...core.ID) 
 			key := makeConceptKey(id)
 
 			// Read concept to get metadata for index cleanup
-			concept, err := r.readConcept(tx, key)
+			concept, err := readConcept(tx, key)
 			if err != nil {
 				return err
 			}
@@ -148,7 +148,7 @@ func (r *ConceptRepository) GetConcept(ctx context.Context, id core.ID) (*core.C
 	err := r.backend.WithTx(func(tx *badger.Txn) error {
 		key := makeConceptKey(id)
 		var err error
-		result, err = r.readConcept(tx, key)
+		result, err = readConcept(tx, key)
 		if err != nil {
 			return err
 		}
@@ -166,7 +166,7 @@ func (r *ConceptRepository) GetConcepts(ctx context.Context, ids ...core.ID) ([]
 	err := r.backend.WithTx(func(tx *badger.Txn) error {
 		for _, id := range ids {
 			key := makeConceptKey(id)
-			concept, err := r.readConcept(tx, key)
+			concept, err := readConcept(tx, key)
 			if err != nil {
 				return err
 			}
@@ -204,7 +204,7 @@ func (r *ConceptRepository) FindConceptByNameAndType(ctx context.Context, name, 
 
 		// Look up full concept
 		conceptKey := makeConceptKey(conceptID)
-		result, err = r.readConcept(tx, conceptKey)
+		result, err = readConcept(tx, conceptKey)
 		if err != nil {
 			return err
 		}
@@ -252,7 +252,7 @@ func (r *ConceptRepository) GetOrCreateConcept(ctx context.Context, name, concep
 // Helper methods
 
 // readConcept reads a concept from the transaction.
-func (r *ConceptRepository) readConcept(tx *badger.Txn, key []byte) (*core.Concept, error) {
+func readConcept(tx *badger.Txn, key []byte) (*core.Concept, error) {
 	item, err := tx.Get(key)
 	if err != nil {
 		if err == badger.ErrKeyNotFound {
