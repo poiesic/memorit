@@ -74,10 +74,15 @@ func OpenBackend(filePath string, inMemory bool) (*Backend, error) {
 			return nil, fmt.Errorf("%s is not a directory", filePath)
 		}
 		opts = badger.DefaultOptions(filePath)
+		// 512 MB
+		opts.BlockCacheSize = 512 << 20
+		// Reduce compaction
+		opts.NumLevelZeroTables = 10
+		opts.NumLevelZeroTablesStall = 30
+		opts.Compression = options.None
 	}
 
 	opts.Logger = &badgerLoggerAdapter{logger: slog.Default()}
-	opts.Compression = options.None
 
 	db, err := badger.Open(opts)
 	if err != nil {
