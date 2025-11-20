@@ -110,4 +110,8 @@ type ConceptRepository interface {
 	// If not, creates it with the provided vector.
 	// Thread-safe: handles concurrent creation attempts.
 	GetOrCreateConcept(ctx context.Context, name, conceptType string, vector []float32) (*core.Concept, error)
+
+	// GetAllConcepts retrieves all concepts from storage.
+	// Used for operations that need to process all concepts, such as reembedding.
+	GetAllConcepts(ctx context.Context) ([]*core.Concept, error)
 }

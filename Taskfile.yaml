@@ -16,8 +16,7 @@ tasks:
     deps: [generate]
     cmds:
       - mkdir -p ./bin
-      - go build -o ./bin/seeder ./cmd/seeder
-      - go build -o ./bin/searcher ./cmd/searcher
+      - go build -o ./bin/memorit ./cmd/memorit
       - go build -o ./bin/musgen ./cmd/musgen
 
   vet:

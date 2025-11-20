@@ -249,7 +249,54 @@ func (r *ConceptRepository) GetOrCreateConcept(ctx context.Context, name, concep
 	return added[0], nil
 }
 
+// GetAllConcepts retrieves all concepts from storage.
+func (r *ConceptRepository) GetAllConcepts(ctx context.Context) ([]*core.Concept, error) {
+	var results []*core.Concept
+	err := r.backend.WithTx(func(tx *badger.Txn) error {
+		// Create iterator to scan all concept keys
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = true
+		iter := tx.NewIterator(opts)
+		defer iter.Close()
+
+		// Seek to first concept key
+		prefix := []byte(conceptRecordPrefix + ":")
+		for iter.Seek(prefix); iter.Valid(); iter.Next() {
+			item := iter.Item()
+			key := item.Key()
+
+			// Stop if we've moved past concept keys
+			if !hasPrefix(key, prefix) {
+				break
+			}
+
+			// Read the concept
+			var concept *core.Concept
+			err := item.Value(func(val []byte) error {
+				var err error
+				concept, err = storage.UnmarshalConcept(val)
+				return err
+			})
+			if err != nil {
+				return err
+			}
+
+			if concept != nil {
+				results = append(results, concept)
+			}
+		}
+		return nil
+	}, false)
+
+	return results, err
+}
+
 // Helper methods
+
+// hasPrefix checks if a byte slice has a given prefix
+func hasPrefix(s, prefix []byte) bool {
+	return len(s) >= len(prefix) && string(s[:len(prefix)]) == string(prefix)
+}
 
 // readConcept reads a concept from the transaction.
 func readConcept(tx *badger.Txn, key []byte) (*core.Concept, error) {

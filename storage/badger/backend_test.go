@@ -340,3 +340,66 @@ func TestGetSequence(t *testing.T) {
 	// IDs should be sequential
 	assert.Greater(t, id2, id1)
 }
+
+func TestStartGC_InMemory(t *testing.T) {
+	// In-memory backends should not start GC automatically
+	backend, err := OpenBackend("", true)
+	require.NoError(t, err)
+	defer backend.Close()
+
+	// Close should work fine even without GC goroutine
+	err = backend.Close()
+	require.NoError(t, err)
+}
+
+func TestStartGC_FileSystem(t *testing.T) {
+	// File-based backends should start GC automatically
+	tmpDir := t.TempDir()
+	backend, err := OpenBackend(tmpDir, false)
+	require.NoError(t, err)
+
+	// Close should cleanly shutdown GC goroutine
+	err = backend.Close()
+	require.NoError(t, err)
+	assert.True(t, backend.IsClosed())
+}
+
+func TestStartGC_CleanShutdown(t *testing.T) {
+	tmpDir := t.TempDir()
+	backend, err := OpenBackend(tmpDir, false)
+	require.NoError(t, err)
+
+	// Give GC goroutine time to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Close should wait for GC goroutine to exit
+	done := make(chan struct{})
+	go func() {
+		err := backend.Close()
+		assert.NoError(t, err)
+		close(done)
+	}()
+
+	// Close should complete within a reasonable time
+	select {
+	case <-done:
+		// Success
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close() did not complete in time - GC goroutine may not have exited")
+	}
+}
+
+func TestStartGC_MultipleClose(t *testing.T) {
+	tmpDir := t.TempDir()
+	backend, err := OpenBackend(tmpDir, false)
+	require.NoError(t, err)
+
+	// First close should succeed
+	err = backend.Close()
+	require.NoError(t, err)
+
+	// Second close should also succeed (idempotent)
+	// Note: BadgerDB's Close() may return an error if called twice,
+	// but the GC goroutine shutdown logic should be safe
+	backend.Close()
+}

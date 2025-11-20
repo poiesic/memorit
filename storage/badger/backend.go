@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"sync"
+	"time"
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/dgraph-io/badger/v4/options"
@@ -20,8 +22,11 @@ const (
 
 // Backend wraps a BadgerDB instance and provides low-level operations.
 type Backend struct {
-	db     *badger.DB
-	logger *slog.Logger
+	db         *badger.DB
+	logger     *slog.Logger
+	ctx        context.Context
+	cancelFunc context.CancelFunc
+	wg         sync.WaitGroup
 }
 
 // badgerLoggerAdapter adapts slog.Logger to badger.Logger interface.
@@ -59,7 +64,7 @@ func OpenBackend(filePath string, inMemory bool) (*Backend, error) {
 		info, err := os.Stat(filePath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				if err := os.MkdirAll(filePath, 0755); err != nil {
+				if err = os.MkdirAll(filePath, 0755); err != nil {
 					return nil, err
 				}
 				info, err = os.Stat(filePath)
@@ -80,6 +85,7 @@ func OpenBackend(filePath string, inMemory bool) (*Backend, error) {
 		opts.NumLevelZeroTables = 10
 		opts.NumLevelZeroTablesStall = 30
 		opts.Compression = options.None
+		opts.CompactL0OnClose = true
 	}
 
 	opts.Logger = &badgerLoggerAdapter{logger: slog.Default()}
@@ -89,14 +95,63 @@ func OpenBackend(filePath string, inMemory bool) (*Backend, error) {
 		return nil, err
 	}
 
-	return &Backend{
-		db:     db,
-		logger: slog.Default(),
-	}, nil
+	ctx, cancel := context.WithCancel(context.Background())
+
+	backend := &Backend{
+		db:         db,
+		logger:     slog.Default(),
+		ctx:        ctx,
+		cancelFunc: cancel,
+	}
+
+	// Start garbage collection goroutine only for persistent databases
+	if !inMemory {
+		backend.StartGC()
+	}
+
+	return backend, nil
 }
 
-// Close closes the BadgerDB database.
+// StartGC starts a background goroutine that periodically runs value log garbage collection.
+// The goroutine runs every 5 minutes and continues to run GC in a loop as long as it makes progress.
+// Call Close() to stop the GC goroutine cleanly.
+func (b *Backend) StartGC() {
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-b.ctx.Done():
+				b.logger.Info("stopping value log GC goroutine")
+				return
+			case <-ticker.C:
+				// Run GC in a loop as long as it makes progress
+				for {
+					err := b.db.RunValueLogGC(0.5)
+					if err != nil {
+						// nil error means GC ran successfully and found something to collect
+						// any other error (including ErrNoRewrite) means we should stop
+						break
+					}
+					b.logger.Debug("value log GC cycle completed")
+				}
+			}
+		}
+	}()
+}
+
+// Close closes the BadgerDB database and waits for the GC goroutine to exit.
 func (b *Backend) Close() error {
+	// Signal GC goroutine to stop
+	b.cancelFunc()
+
+	// Wait for GC goroutine to finish
+	b.wg.Wait()
+
 	return b.db.Close()
 }
 

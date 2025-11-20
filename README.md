@@ -25,9 +25,11 @@ memorit/
 │   └── mock/       # Test doubles
 ├── ingestion/      # Pipeline for processing chat records
 ├── search/         # Hybrid semantic search engine
+├── reembed/        # Reembedding utilities for updating embeddings
 └── cmd/            # Command-line applications
     ├── seeder/     # Database seeding utility
     ├── searcher/   # Search interface
+    ├── reembedder/ # Embedding regeneration tool
     └── musgen/     # Code generation for serialization
 ```
 
