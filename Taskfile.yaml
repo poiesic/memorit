@@ -1,40 +1,88 @@
-version: '3'
+version: "3"
 
 tasks:
-  generate:
-    desc: Generate code (MUS serialization)
-    cmds:
-      - go generate ./...
+    generate:
+        desc: Generate code (MUS serialization)
+        silent: true
+        status:
+            - test -f core/records_mus.gen.go
+        cmds:
+            - go generate ./...
 
-  test:
-    desc: Run all tests
-    cmds:
-      - go test -v ./...
+    test:
+        desc: Run all tests
+        cmds:
+            - task: staticcheck
+            - go test -cover -v ./...
+    bin:
+        silent: true
+        status:
+            - test -d bin
+        cmds:
+            - mkdir -p bin
+    memorit:
+        desc: Build memorit CLI utlility
+        deps:
+            - bin
+            - generate
+        cmds:
+            - go build -o bin/memorit ./cmd/memorit
+    musgen:
+        deps:
+            - bin
+            - generate
+        cmds:
+            - go build -o bin/musgen ./cmd/musgen
+    seeder:
+        desc: Build memorit seeder CLI tool
+        deps:
+            - bin
+            - generate
+        cmds:
+            - go build -o bin/seeder ./cmd/seeder
+    searcher:
+        desc: Build memority searcher CLI tool
+        deps:
+            - bin
+            - generate
+        cmds:
+            - go build -o bin/searcher ./cmd/searcher
+    build:
+        desc: Build all binaries
+        deps:
+            # - staticcheck
+            - vet
+        cmds:
+            - task: musgen
+            - task: memorit
+            - task: seeder
+            - task: searcher
+    vet:
+        desc: Run go vet
+        cmds:
+            - go vet ./...
 
-  build:
-    desc: Build all binaries
-    deps: [generate]
-    cmds:
-      - mkdir -p ./bin
-      - go build -o ./bin/memorit ./cmd/memorit
-      - go build -o ./bin/musgen ./cmd/musgen
+    clean:
+        desc: Clean build artifacts
+        cmds:
+            - rm -rf ./bin
 
-  vet:
-    desc: Run go vet
-    cmds:
-      - go vet ./...
+    tidy:
+        desc: Tidy go modules
+        cmds:
+            - go mod tidy
 
-  clean:
-    desc: Clean build artifacts
-    cmds:
-      - rm -rf ./bin
-
-  tidy:
-    desc: Tidy go modules
-    cmds:
-      - go mod tidy
-
-  default:
-    desc: Show available tasks
-    cmds:
-      - task --list
+    default:
+        desc: Show available tasks
+        cmds:
+            - task --list
+    deadcode:
+        desc: Run deadcode tool to find unused functions
+        silent: true
+        cmds:
+            - go tool deadcode -test=true ./...
+    staticcheck:
+        desc: Run staticcheck linter against code
+        silent: true
+        cmds:
+            - go tool staticcheck ./...
