@@ -49,3 +49,19 @@ func UnmarshalConcept(data []byte) (*core.Concept, error) {
 	}
 	return &concept, nil
 }
+
+// MarshalCheckpoint serializes a Checkpoint to bytes.
+func MarshalCheckpoint(checkpoint *core.Checkpoint) []byte {
+	buf := make([]byte, core.CheckpointMUS.Size(*checkpoint))
+	core.CheckpointMUS.Marshal(*checkpoint, buf)
+	return buf
+}
+
+// UnmarshalCheckpoint deserializes a Checkpoint from bytes.
+func UnmarshalCheckpoint(data []byte) (*core.Checkpoint, error) {
+	checkpoint, _, err := core.CheckpointMUS.Unmarshal(data)
+	if err != nil {
+		return nil, err
+	}
+	return &checkpoint, nil
+}

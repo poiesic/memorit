@@ -7,11 +7,15 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/poiesic/memorit/ai"
 	"github.com/poiesic/memorit/core"
 	"github.com/poiesic/memorit/storage"
 )
+
+// ProcessorTypeConcept is the checkpoint key for the concept processor.
+const ProcessorTypeConcept = "concept"
 
 // concept is an internal type used for processing extracted concepts.
 // It wraps ai.ExtractedConcept with additional helper methods.
@@ -39,13 +43,14 @@ func fromExtractedConcept(ec ai.ExtractedConcept) concept {
 
 // conceptProcessor extracts concepts from chat records and assigns them.
 type conceptProcessor struct {
-	chatRepository    storage.ChatRepository
-	conceptRepository storage.ConceptRepository
-	embedder          ai.Embedder
-	extractor         ai.ConceptExtractor
-	contextTurns      int // Number of previous turns to include for context (0 = current message only)
-	lastID            core.ID
-	logger            *slog.Logger
+	chatRepository       storage.ChatRepository
+	conceptRepository    storage.ConceptRepository
+	checkpointRepository storage.CheckpointRepository
+	embedder             ai.Embedder
+	extractor            ai.ConceptExtractor
+	contextTurns         int // Number of previous turns to include for context (0 = current message only)
+	lastID               core.ID
+	logger               *slog.Logger
 }
 
 var _ processor = (*conceptProcessor)(nil)
@@ -61,6 +66,7 @@ type recordConceptPos struct {
 func newConceptProcessor(
 	chatRepository storage.ChatRepository,
 	conceptRepository storage.ConceptRepository,
+	checkpointRepository storage.CheckpointRepository,
 	embedder ai.Embedder,
 	extractor ai.ConceptExtractor,
 	contextTurns int,
@@ -72,6 +78,9 @@ func newConceptProcessor(
 	if conceptRepository == nil {
 		return nil, fmt.Errorf("concept repository required")
 	}
+	if checkpointRepository == nil {
+		return nil, fmt.Errorf("checkpoint repository required")
+	}
 	if embedder == nil {
 		return nil, fmt.Errorf("embedder required")
 	}
@@ -82,12 +91,13 @@ func newConceptProcessor(
 		logger = slog.Default()
 	}
 	return &conceptProcessor{
-		chatRepository:    chatRepository,
-		conceptRepository: conceptRepository,
-		embedder:          embedder,
-		extractor:         extractor,
-		contextTurns:      contextTurns,
-		logger:            logger.With("processor", "concepts"),
+		chatRepository:       chatRepository,
+		conceptRepository:    conceptRepository,
+		checkpointRepository: checkpointRepository,
+		embedder:             embedder,
+		extractor:            extractor,
+		contextTurns:         contextTurns,
+		logger:               logger.With("processor", "concepts"),
 	}, nil
 }
 
@@ -276,8 +286,14 @@ func (cp *conceptProcessor) getOrCreateConcepts(ctx context.Context, rawConcepts
 }
 
 // checkpoint saves the processor's current state.
-// Currently unimplemented - reserved for future checkpointing support.
 func (cp *conceptProcessor) checkpoint() error {
-	// TODO: Implement checkpoint storage via repository
-	return nil
+	if cp.lastID == 0 {
+		return nil
+	}
+	checkpoint := &core.Checkpoint{
+		ProcessorType: ProcessorTypeConcept,
+		LastID:        cp.lastID,
+		UpdatedAt:     time.Now().UTC(),
+	}
+	return cp.checkpointRepository.SaveCheckpoint(context.Background(), checkpoint)
 }

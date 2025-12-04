@@ -12,11 +12,12 @@ import (
 )
 
 type Database struct {
-	backend     *badger.Backend
-	chatRepo    storage.ChatRepository
-	conceptRepo storage.ConceptRepository
-	provider    ai.AIProvider
-	logger      *slog.Logger
+	backend        *badger.Backend
+	chatRepo       storage.ChatRepository
+	conceptRepo    storage.ConceptRepository
+	checkpointRepo storage.CheckpointRepository
+	provider       ai.AIProvider
+	logger         *slog.Logger
 }
 
 // DatabaseOption configures a Database.
@@ -55,6 +56,9 @@ func NewDatabase(filePath string, opts ...DatabaseOption) (*Database, error) {
 		return nil, err
 	}
 
+	// Create checkpoint repository
+	checkpointRepo := badger.NewCheckpointRepository(backend)
+
 	// Create AI provider with configured settings
 	provider, err := openai.NewProvider(options.aiConfig)
 	if err != nil {
@@ -65,11 +69,12 @@ func NewDatabase(filePath string, opts ...DatabaseOption) (*Database, error) {
 	}
 
 	return &Database{
-		backend:     backend,
-		chatRepo:    chatRepo,
-		conceptRepo: conceptRepo,
-		provider:    provider,
-		logger:      slog.Default(),
+		backend:        backend,
+		chatRepo:       chatRepo,
+		conceptRepo:    conceptRepo,
+		checkpointRepo: checkpointRepo,
+		provider:       provider,
+		logger:         slog.Default(),
 	}, nil
 }
 
@@ -106,7 +111,11 @@ func (db *Database) ConceptRepository() storage.ConceptRepository {
 }
 
 func (db *Database) NewIngestionPipeline(opts ...ingestion.Option) (*ingestion.Pipeline, error) {
-	return ingestion.NewPipeline(db.chatRepo, db.conceptRepo, db.provider, opts...)
+	return ingestion.NewPipeline(db.chatRepo, db.conceptRepo, db.checkpointRepo, db.provider, opts...)
+}
+
+func (db *Database) CheckpointRepository() storage.CheckpointRepository {
+	return db.checkpointRepo
 }
 
 func (db *Database) NewSearcher(opts ...search.Option) (*search.Searcher, error) {

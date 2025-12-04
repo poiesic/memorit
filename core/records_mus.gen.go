@@ -303,3 +303,51 @@ func (s conceptRefMUS) Skip(bs []byte) (n int, err error) {
 	n += n1
 	return
 }
+
+var CheckpointMUS = checkpointMUS{}
+
+type checkpointMUS struct{}
+
+func (s checkpointMUS) Marshal(v Checkpoint, bs []byte) (n int) {
+	n = ord.String.Marshal(v.ProcessorType, bs)
+	n += IDMUS.Marshal(v.LastID, bs[n:])
+	return n + raw.TimeUnixMicro.Marshal(v.UpdatedAt, bs[n:])
+}
+
+func (s checkpointMUS) Unmarshal(bs []byte) (v Checkpoint, n int, err error) {
+	v.ProcessorType, n, err = ord.String.Unmarshal(bs)
+	if err != nil {
+		return
+	}
+	var n1 int
+	v.LastID, n1, err = IDMUS.Unmarshal(bs[n:])
+	n += n1
+	if err != nil {
+		return
+	}
+	v.UpdatedAt, n1, err = raw.TimeUnixMicro.Unmarshal(bs[n:])
+	n += n1
+	return
+}
+
+func (s checkpointMUS) Size(v Checkpoint) (size int) {
+	size = ord.String.Size(v.ProcessorType)
+	size += IDMUS.Size(v.LastID)
+	return size + raw.TimeUnixMicro.Size(v.UpdatedAt)
+}
+
+func (s checkpointMUS) Skip(bs []byte) (n int, err error) {
+	n, err = ord.String.Skip(bs)
+	if err != nil {
+		return
+	}
+	var n1 int
+	n1, err = IDMUS.Skip(bs[n:])
+	n += n1
+	if err != nil {
+		return
+	}
+	n1, err = raw.TimeUnixMicro.Skip(bs[n:])
+	n += n1
+	return
+}

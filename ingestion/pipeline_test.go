@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,8 +28,15 @@ func (m *testConceptExtractor) ExtractConcepts(ctx context.Context, text string)
 	if m.shouldError || text == m.errorOnText {
 		return nil, errors.New("extraction error")
 	}
+	// First try exact match
 	if concepts, ok := m.responses[text]; ok {
 		return concepts, nil
+	}
+	// Then try substring match (for context windows that combine messages)
+	for key, concepts := range m.responses {
+		if strings.Contains(text, key) {
+			return concepts, nil
+		}
 	}
 	return []ai.ExtractedConcept{}, nil
 }
@@ -82,7 +90,27 @@ func (p *testAIProvider) Close() error {
 	return nil
 }
 
-func setupTestRepositories(t *testing.T) (storage.ChatRepository, storage.ConceptRepository, func()) {
+// testCheckpointRepository implements storage.CheckpointRepository for testing
+type testCheckpointRepository struct {
+	checkpoints map[string]*core.Checkpoint
+}
+
+func newTestCheckpointRepository() *testCheckpointRepository {
+	return &testCheckpointRepository{
+		checkpoints: make(map[string]*core.Checkpoint),
+	}
+}
+
+func (r *testCheckpointRepository) SaveCheckpoint(ctx context.Context, checkpoint *core.Checkpoint) error {
+	r.checkpoints[checkpoint.ProcessorType] = checkpoint
+	return nil
+}
+
+func (r *testCheckpointRepository) LoadCheckpoint(ctx context.Context, processorType string) (*core.Checkpoint, error) {
+	return r.checkpoints[processorType], nil
+}
+
+func setupTestRepositories(t *testing.T) (storage.ChatRepository, storage.ConceptRepository, storage.CheckpointRepository, func()) {
 	backend, err := badger.OpenBackend(t.TempDir(), false)
 	require.NoError(t, err)
 
@@ -92,17 +120,19 @@ func setupTestRepositories(t *testing.T) (storage.ChatRepository, storage.Concep
 	conceptRepo, err := badger.NewConceptRepository(backend)
 	require.NoError(t, err)
 
+	checkpointRepo := badger.NewCheckpointRepository(backend)
+
 	cleanup := func() {
 		conceptRepo.Close()
 		chatRepo.Close()
 		backend.Close()
 	}
 
-	return chatRepo, conceptRepo, cleanup
+	return chatRepo, conceptRepo, checkpointRepo, cleanup
 }
 
 func setupTestConceptProcessor(t *testing.T) (*conceptProcessor, storage.ChatRepository) {
-	chatRepo, conceptRepo, cleanup := setupTestRepositories(t)
+	chatRepo, conceptRepo, checkpointRepo, cleanup := setupTestRepositories(t)
 	t.Cleanup(cleanup)
 
 	embedder := &testEmbedder{}
@@ -112,7 +142,7 @@ func setupTestConceptProcessor(t *testing.T) (*conceptProcessor, storage.ChatRep
 	}
 
 	// Use 0 window for tests to avoid context concatenation
-	cp, err := newConceptProcessor(chatRepo, conceptRepo, embedder, extractor, 0, nil)
+	cp, err := newConceptProcessor(chatRepo, conceptRepo, checkpointRepo, embedder, extractor, 0, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cp)
 
@@ -416,7 +446,7 @@ func TestConceptProcessor_Process_NoConceptsClassified(t *testing.T) {
 }
 
 func TestEmbeddingProcessor_Process(t *testing.T) {
-	chatRepo, _, cleanup := setupTestRepositories(t)
+	chatRepo, _, checkpointRepo, cleanup := setupTestRepositories(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -424,7 +454,7 @@ func TestEmbeddingProcessor_Process(t *testing.T) {
 		embeddings: [][]float32{{0.1, 0.2, 0.3}, {0.4, 0.5, 0.6}},
 	}
 
-	ep, err := newEmbeddingProcessor(chatRepo, embedder, nil)
+	ep, err := newEmbeddingProcessor(chatRepo, checkpointRepo, embedder, nil)
 	require.NoError(t, err)
 
 	// Add records
@@ -452,7 +482,7 @@ func TestEmbeddingProcessor_Process(t *testing.T) {
 }
 
 func TestEmbeddingProcessor_Process_EmbedderError(t *testing.T) {
-	chatRepo, _, cleanup := setupTestRepositories(t)
+	chatRepo, _, checkpointRepo, cleanup := setupTestRepositories(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -460,7 +490,7 @@ func TestEmbeddingProcessor_Process_EmbedderError(t *testing.T) {
 		shouldError: true,
 	}
 
-	ep, err := newEmbeddingProcessor(chatRepo, embedder, nil)
+	ep, err := newEmbeddingProcessor(chatRepo, checkpointRepo, embedder, nil)
 	require.NoError(t, err)
 
 	// Add record
@@ -481,7 +511,7 @@ func TestEmbeddingProcessor_Process_EmbedderError(t *testing.T) {
 }
 
 func TestNewPipeline(t *testing.T) {
-	chatRepo, conceptRepo, cleanup := setupTestRepositories(t)
+	chatRepo, conceptRepo, checkpointRepo, cleanup := setupTestRepositories(t)
 	defer cleanup()
 
 	embedder := &testEmbedder{}
@@ -489,7 +519,7 @@ func TestNewPipeline(t *testing.T) {
 	provider := &testAIProvider{embedder: embedder, extractor: extractor}
 
 	t.Run("valid pipeline", func(t *testing.T) {
-		pipeline, err := NewPipeline(chatRepo, conceptRepo, provider)
+		pipeline, err := NewPipeline(chatRepo, conceptRepo, checkpointRepo, provider)
 		require.NoError(t, err)
 		require.NotNil(t, pipeline)
 		defer pipeline.Release()
@@ -501,23 +531,28 @@ func TestNewPipeline(t *testing.T) {
 	})
 
 	t.Run("nil chat repository", func(t *testing.T) {
-		_, err := NewPipeline(nil, conceptRepo, provider)
+		_, err := NewPipeline(nil, conceptRepo, checkpointRepo, provider)
 		assert.Equal(t, ErrChatRepositoryRequired, err)
 	})
 
 	t.Run("nil concept repository", func(t *testing.T) {
-		_, err := NewPipeline(chatRepo, nil, provider)
+		_, err := NewPipeline(chatRepo, nil, checkpointRepo, provider)
 		assert.Equal(t, ErrConceptRepositoryRequired, err)
 	})
 
+	t.Run("nil checkpoint repository", func(t *testing.T) {
+		_, err := NewPipeline(chatRepo, conceptRepo, nil, provider)
+		assert.Equal(t, ErrCheckpointRepositoryRequired, err)
+	})
+
 	t.Run("nil provider", func(t *testing.T) {
-		_, err := NewPipeline(chatRepo, conceptRepo, nil)
+		_, err := NewPipeline(chatRepo, conceptRepo, checkpointRepo, nil)
 		assert.Equal(t, ErrAIProviderRequired, err)
 	})
 }
 
 func TestPipeline_WithOptions(t *testing.T) {
-	chatRepo, conceptRepo, cleanup := setupTestRepositories(t)
+	chatRepo, conceptRepo, checkpointRepo, cleanup := setupTestRepositories(t)
 	defer cleanup()
 
 	embedder := &testEmbedder{}
@@ -525,7 +560,7 @@ func TestPipeline_WithOptions(t *testing.T) {
 	provider := &testAIProvider{embedder: embedder, extractor: extractor}
 
 	t.Run("with pool size", func(t *testing.T) {
-		pipeline, err := NewPipeline(chatRepo, conceptRepo, provider, WithPoolSize(4))
+		pipeline, err := NewPipeline(chatRepo, conceptRepo, checkpointRepo, provider, WithPoolSize(4))
 		require.NoError(t, err)
 		require.NotNil(t, pipeline)
 		defer pipeline.Release()
@@ -536,7 +571,7 @@ func TestPipeline_WithOptions(t *testing.T) {
 	})
 
 	t.Run("with pool size zero defaults to 1", func(t *testing.T) {
-		pipeline, err := NewPipeline(chatRepo, conceptRepo, provider, WithPoolSize(0))
+		pipeline, err := NewPipeline(chatRepo, conceptRepo, checkpointRepo, provider, WithPoolSize(0))
 		require.NoError(t, err)
 		require.NotNil(t, pipeline)
 		defer pipeline.Release()
@@ -544,7 +579,7 @@ func TestPipeline_WithOptions(t *testing.T) {
 
 	t.Run("with custom logger", func(t *testing.T) {
 		logger := slog.Default()
-		pipeline, err := NewPipeline(chatRepo, conceptRepo, provider, WithLogger(logger))
+		pipeline, err := NewPipeline(chatRepo, conceptRepo, checkpointRepo, provider, WithLogger(logger))
 		require.NoError(t, err)
 		require.NotNil(t, pipeline)
 		defer pipeline.Release()
@@ -553,7 +588,7 @@ func TestPipeline_WithOptions(t *testing.T) {
 	})
 
 	t.Run("with nil logger falls back to default", func(t *testing.T) {
-		pipeline, err := NewPipeline(chatRepo, conceptRepo, provider, WithLogger(nil))
+		pipeline, err := NewPipeline(chatRepo, conceptRepo, checkpointRepo, provider, WithLogger(nil))
 		require.NoError(t, err)
 		require.NotNil(t, pipeline)
 		defer pipeline.Release()
@@ -566,6 +601,7 @@ func TestPipeline_WithOptions(t *testing.T) {
 		pipeline, err := NewPipeline(
 			chatRepo,
 			conceptRepo,
+			checkpointRepo,
 			provider,
 			WithPoolSize(2),
 			WithLogger(logger),
@@ -579,7 +615,7 @@ func TestPipeline_WithOptions(t *testing.T) {
 }
 
 func TestPipeline_Ingest(t *testing.T) {
-	chatRepo, conceptRepo, cleanup := setupTestRepositories(t)
+	chatRepo, conceptRepo, checkpointRepo, cleanup := setupTestRepositories(t)
 	defer cleanup()
 
 	embedder := &testEmbedder{
@@ -594,7 +630,7 @@ func TestPipeline_Ingest(t *testing.T) {
 	}
 	provider := &testAIProvider{embedder: embedder, extractor: extractor}
 
-	pipeline, err := NewPipeline(chatRepo, conceptRepo, provider, WithPoolSize(1))
+	pipeline, err := NewPipeline(chatRepo, conceptRepo, checkpointRepo, provider, WithPoolSize(1))
 	require.NoError(t, err)
 	defer pipeline.Release()
 
@@ -656,14 +692,14 @@ func TestPipeline_Ingest(t *testing.T) {
 }
 
 func TestPipeline_Release(t *testing.T) {
-	chatRepo, conceptRepo, cleanup := setupTestRepositories(t)
+	chatRepo, conceptRepo, checkpointRepo, cleanup := setupTestRepositories(t)
 	defer cleanup()
 
 	embedder := &testEmbedder{}
 	extractor := &testConceptExtractor{responses: make(map[string][]ai.ExtractedConcept)}
 	provider := &testAIProvider{embedder: embedder, extractor: extractor}
 
-	pipeline, err := NewPipeline(chatRepo, conceptRepo, provider)
+	pipeline, err := NewPipeline(chatRepo, conceptRepo, checkpointRepo, provider)
 	require.NoError(t, err)
 
 	// Release should not panic
@@ -676,20 +712,288 @@ func TestPipeline_Release(t *testing.T) {
 func TestConceptProcessor_Checkpoint(t *testing.T) {
 	cp, _ := setupTestConceptProcessor(t)
 
-	// Checkpoint should not error (currently a no-op)
+	// Checkpoint should not error when no records processed
 	err := cp.checkpoint()
 	require.NoError(t, err)
 }
 
 func TestEmbeddingProcessor_Checkpoint(t *testing.T) {
-	chatRepo, _, cleanup := setupTestRepositories(t)
+	chatRepo, _, checkpointRepo, cleanup := setupTestRepositories(t)
 	defer cleanup()
 
 	embedder := &testEmbedder{}
-	ep, err := newEmbeddingProcessor(chatRepo, embedder, nil)
+	ep, err := newEmbeddingProcessor(chatRepo, checkpointRepo, embedder, nil)
 	require.NoError(t, err)
 
-	// Checkpoint should not error (currently a no-op)
+	// Checkpoint should not error when no records processed
 	err = ep.checkpoint()
 	require.NoError(t, err)
+}
+
+func TestEmbeddingProcessor_Checkpoint_SavesAfterProcessing(t *testing.T) {
+	chatRepo, _, checkpointRepo, cleanup := setupTestRepositories(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	embedder := &testEmbedder{}
+	ep, err := newEmbeddingProcessor(chatRepo, checkpointRepo, embedder, nil)
+	require.NoError(t, err)
+
+	// Add and process records
+	records := []*core.ChatRecord{
+		{Speaker: core.SpeakerTypeHuman, Contents: "Test 1", Timestamp: time.Now().UTC()},
+		{Speaker: core.SpeakerTypeHuman, Contents: "Test 2", Timestamp: time.Now().UTC()},
+	}
+	added, err := chatRepo.AddChatRecords(ctx, records...)
+	require.NoError(t, err)
+
+	ids := []core.ID{added[0].Id, added[1].Id}
+	err = ep.process(ctx, ids...)
+	require.NoError(t, err)
+
+	// Save checkpoint
+	err = ep.checkpoint()
+	require.NoError(t, err)
+
+	// Verify checkpoint was saved with correct lastID
+	checkpoint, err := checkpointRepo.LoadCheckpoint(ctx, ProcessorTypeEmbedding)
+	require.NoError(t, err)
+	require.NotNil(t, checkpoint)
+	assert.Equal(t, added[1].Id, checkpoint.LastID)
+	assert.Equal(t, ProcessorTypeEmbedding, checkpoint.ProcessorType)
+}
+
+// failingCheckpointRepository simulates checkpoint failures
+type failingCheckpointRepository struct {
+	saveError error
+	loadError error
+	inner     storage.CheckpointRepository
+}
+
+func (r *failingCheckpointRepository) SaveCheckpoint(ctx context.Context, checkpoint *core.Checkpoint) error {
+	if r.saveError != nil {
+		return r.saveError
+	}
+	if r.inner != nil {
+		return r.inner.SaveCheckpoint(ctx, checkpoint)
+	}
+	return nil
+}
+
+func (r *failingCheckpointRepository) LoadCheckpoint(ctx context.Context, processorType string) (*core.Checkpoint, error) {
+	if r.loadError != nil {
+		return nil, r.loadError
+	}
+	if r.inner != nil {
+		return r.inner.LoadCheckpoint(ctx, processorType)
+	}
+	return nil, nil
+}
+
+func TestEmbeddingProcessor_Checkpoint_SaveFailure(t *testing.T) {
+	chatRepo, _, _, cleanup := setupTestRepositories(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	saveErr := errors.New("checkpoint save failed")
+	failingRepo := &failingCheckpointRepository{saveError: saveErr}
+
+	embedder := &testEmbedder{}
+	ep, err := newEmbeddingProcessor(chatRepo, failingRepo, embedder, nil)
+	require.NoError(t, err)
+
+	// Add and process a record
+	record := &core.ChatRecord{Speaker: core.SpeakerTypeHuman, Contents: "Test", Timestamp: time.Now().UTC()}
+	added, err := chatRepo.AddChatRecords(ctx, record)
+	require.NoError(t, err)
+
+	err = ep.process(ctx, added[0].Id)
+	require.NoError(t, err)
+
+	// Checkpoint should fail
+	err = ep.checkpoint()
+	require.Error(t, err)
+	assert.Equal(t, saveErr, err)
+}
+
+func TestPipeline_Recovery_LoadCheckpointFailure(t *testing.T) {
+	chatRepo, conceptRepo, _, cleanup := setupTestRepositories(t)
+	defer cleanup()
+
+	loadErr := errors.New("checkpoint load failed")
+	failingRepo := &failingCheckpointRepository{loadError: loadErr}
+
+	embedder := &testEmbedder{}
+	extractor := &testConceptExtractor{responses: make(map[string][]ai.ExtractedConcept)}
+	provider := &testAIProvider{embedder: embedder, extractor: extractor}
+
+	// Pipeline creation should fail due to checkpoint load error
+	_, err := NewPipeline(chatRepo, conceptRepo, failingRepo, provider)
+	require.Error(t, err)
+	assert.Equal(t, loadErr, err)
+}
+
+func TestPipeline_Recovery_PartialCheckpoint(t *testing.T) {
+	chatRepo, conceptRepo, checkpointRepo, cleanup := setupTestRepositories(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	embedder := &testEmbedder{}
+	extractor := &testConceptExtractor{
+		responses: map[string][]ai.ExtractedConcept{
+			"Message 1": {{Name: "topic1", Type: "topic", Importance: 5}},
+			"Message 2": {{Name: "topic2", Type: "topic", Importance: 6}},
+		},
+	}
+	provider := &testAIProvider{embedder: embedder, extractor: extractor}
+
+	// Add records
+	records := []*core.ChatRecord{
+		{Speaker: core.SpeakerTypeHuman, Contents: "Message 1", Timestamp: time.Now().UTC()},
+		{Speaker: core.SpeakerTypeHuman, Contents: "Message 2", Timestamp: time.Now().UTC()},
+	}
+	added, err := chatRepo.AddChatRecords(ctx, records...)
+	require.NoError(t, err)
+
+	// Simulate partial state: embedding checkpoint at record 1, concept checkpoint at record 0
+	// This means embeddings are done for record 1, but concepts need processing for both
+	err = checkpointRepo.SaveCheckpoint(ctx, &core.Checkpoint{
+		ProcessorType: ProcessorTypeEmbedding,
+		LastID:        added[0].Id,
+	})
+	require.NoError(t, err)
+	// No concept checkpoint - both records need concept processing
+
+	// Create pipeline - should recover
+	pipeline, err := NewPipeline(chatRepo, conceptRepo, checkpointRepo, provider, WithPoolSize(1))
+	require.NoError(t, err)
+	defer pipeline.Release()
+
+	// Verify: record 2 should have embedding (recovery processed it)
+	// Both records should have concepts (both were processed during concept recovery)
+	processed, err := chatRepo.GetChatRecords(ctx, added[0].Id, added[1].Id)
+	require.NoError(t, err)
+
+	// Record 1 was already past embedding checkpoint, so only record 2 got embedding in recovery
+	// But both need to have vectors since record 1 didn't have one before
+	// Actually, let me verify the embeddings - record 1 may not have been processed
+	// since its ID <= checkpoint
+	assert.NotEmpty(t, processed[1].Vector, "record 2 should have embedding from recovery")
+
+	// Both should have concepts since concept checkpoint was nil
+	assert.NotEmpty(t, processed[0].Concepts, "record 1 should have concepts")
+	assert.NotEmpty(t, processed[1].Concepts, "record 2 should have concepts")
+}
+
+func TestPipeline_Recovery_NoRecoveryNeeded(t *testing.T) {
+	chatRepo, conceptRepo, checkpointRepo, cleanup := setupTestRepositories(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	embedder := &testEmbedder{}
+	extractor := &testConceptExtractor{responses: make(map[string][]ai.ExtractedConcept)}
+	provider := &testAIProvider{embedder: embedder, extractor: extractor}
+
+	// Add a record and process it fully
+	record := &core.ChatRecord{Speaker: core.SpeakerTypeHuman, Contents: "Test", Timestamp: time.Now().UTC()}
+	added, err := chatRepo.AddChatRecords(ctx, record)
+	require.NoError(t, err)
+
+	// Set checkpoints at the latest record
+	err = checkpointRepo.SaveCheckpoint(ctx, &core.Checkpoint{
+		ProcessorType: ProcessorTypeEmbedding,
+		LastID:        added[0].Id,
+	})
+	require.NoError(t, err)
+	err = checkpointRepo.SaveCheckpoint(ctx, &core.Checkpoint{
+		ProcessorType: ProcessorTypeConcept,
+		LastID:        added[0].Id,
+	})
+	require.NoError(t, err)
+
+	// Create pipeline - should not need recovery
+	pipeline, err := NewPipeline(chatRepo, conceptRepo, checkpointRepo, provider, WithPoolSize(1))
+	require.NoError(t, err)
+	defer pipeline.Release()
+
+	// Pipeline should be created successfully with no recovery needed
+	assert.NotNil(t, pipeline)
+}
+
+func TestPipeline_Recovery_ProcessingFailure(t *testing.T) {
+	chatRepo, conceptRepo, checkpointRepo, cleanup := setupTestRepositories(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Embedder that fails
+	embedder := &testEmbedder{shouldError: true}
+	extractor := &testConceptExtractor{responses: make(map[string][]ai.ExtractedConcept)}
+	provider := &testAIProvider{embedder: embedder, extractor: extractor}
+
+	// Add a record that will need recovery
+	record := &core.ChatRecord{Speaker: core.SpeakerTypeHuman, Contents: "Test", Timestamp: time.Now().UTC()}
+	_, err := chatRepo.AddChatRecords(ctx, record)
+	require.NoError(t, err)
+
+	// Create pipeline - should fail during recovery due to embedder error
+	_, err = NewPipeline(chatRepo, conceptRepo, checkpointRepo, provider, WithPoolSize(1))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "embedder error")
+}
+
+func TestPipeline_Recovery(t *testing.T) {
+	chatRepo, conceptRepo, checkpointRepo, cleanup := setupTestRepositories(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	embedder := &testEmbedder{}
+	extractor := &testConceptExtractor{
+		responses: map[string][]ai.ExtractedConcept{
+			"Message 1": {{Name: "topic1", Type: "topic", Importance: 5}},
+			"Message 2": {{Name: "topic2", Type: "topic", Importance: 6}},
+			"Message 3": {{Name: "topic3", Type: "topic", Importance: 7}},
+		},
+	}
+	provider := &testAIProvider{embedder: embedder, extractor: extractor}
+
+	// Add records directly to simulate records added before crash
+	records := []*core.ChatRecord{
+		{Speaker: core.SpeakerTypeHuman, Contents: "Message 1", Timestamp: time.Now().UTC()},
+		{Speaker: core.SpeakerTypeHuman, Contents: "Message 2", Timestamp: time.Now().UTC()},
+		{Speaker: core.SpeakerTypeHuman, Contents: "Message 3", Timestamp: time.Now().UTC()},
+	}
+	added, err := chatRepo.AddChatRecords(ctx, records...)
+	require.NoError(t, err)
+	require.Len(t, added, 3)
+
+	// Create pipeline - should auto-recover the 3 pending records
+	pipeline, err := NewPipeline(chatRepo, conceptRepo, checkpointRepo, provider, WithPoolSize(1))
+	require.NoError(t, err)
+	defer pipeline.Release()
+
+	// Verify records were processed during recovery
+	processed, err := chatRepo.GetChatRecords(ctx, added[0].Id, added[1].Id, added[2].Id)
+	require.NoError(t, err)
+	require.Len(t, processed, 3)
+
+	// All records should have embeddings
+	for i, rec := range processed {
+		assert.NotEmpty(t, rec.Vector, "record %d should have embedding", i)
+	}
+
+	// All records should have concepts
+	for i, rec := range processed {
+		assert.NotEmpty(t, rec.Concepts, "record %d should have concepts", i)
+	}
+
+	// Verify checkpoint was saved
+	embeddingCheckpoint, err := checkpointRepo.LoadCheckpoint(ctx, ProcessorTypeEmbedding)
+	require.NoError(t, err)
+	require.NotNil(t, embeddingCheckpoint)
+	assert.Equal(t, added[2].Id, embeddingCheckpoint.LastID)
+
+	conceptCheckpoint, err := checkpointRepo.LoadCheckpoint(ctx, ProcessorTypeConcept)
+	require.NoError(t, err)
+	require.NotNil(t, conceptCheckpoint)
+	assert.Equal(t, added[2].Id, conceptCheckpoint.LastID)
 }

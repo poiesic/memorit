@@ -5,26 +5,39 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/poiesic/memorit/ai"
 	"github.com/poiesic/memorit/core"
 	"github.com/poiesic/memorit/storage"
 )
 
+// ProcessorTypeEmbedding is the checkpoint key for the embedding processor.
+const ProcessorTypeEmbedding = "embedding"
+
 // embeddingProcessor generates embeddings for chat records.
 type embeddingProcessor struct {
-	chatRepository storage.ChatRepository
-	embedder       ai.Embedder
-	lastID         core.ID
-	logger         *slog.Logger
+	chatRepository       storage.ChatRepository
+	checkpointRepository storage.CheckpointRepository
+	embedder             ai.Embedder
+	lastID               core.ID
+	logger               *slog.Logger
 }
 
 var _ processor = (*embeddingProcessor)(nil)
 
 // newEmbeddingProcessor creates a new embedding processor.
-func newEmbeddingProcessor(chatRepository storage.ChatRepository, embedder ai.Embedder, logger *slog.Logger) (processor, error) {
+func newEmbeddingProcessor(
+	chatRepository storage.ChatRepository,
+	checkpointRepository storage.CheckpointRepository,
+	embedder ai.Embedder,
+	logger *slog.Logger,
+) (processor, error) {
 	if chatRepository == nil {
 		return nil, fmt.Errorf("chat repository required")
+	}
+	if checkpointRepository == nil {
+		return nil, fmt.Errorf("checkpoint repository required")
 	}
 	if embedder == nil {
 		return nil, fmt.Errorf("embedder required")
@@ -33,9 +46,10 @@ func newEmbeddingProcessor(chatRepository storage.ChatRepository, embedder ai.Em
 		logger = slog.Default()
 	}
 	return &embeddingProcessor{
-		chatRepository: chatRepository,
-		embedder:       embedder,
-		logger:         logger.With("processor", "embeddings"),
+		chatRepository:       chatRepository,
+		checkpointRepository: checkpointRepository,
+		embedder:             embedder,
+		logger:               logger.With("processor", "embeddings"),
 	}, nil
 }
 
@@ -86,8 +100,14 @@ func (ep *embeddingProcessor) process(ctx context.Context, ids ...core.ID) error
 }
 
 // checkpoint saves the processor's current state.
-// Currently unimplemented - reserved for future checkpointing support.
 func (ep *embeddingProcessor) checkpoint() error {
-	// TODO: Implement checkpoint storage via repository
-	return nil
+	if ep.lastID == 0 {
+		return nil
+	}
+	checkpoint := &core.Checkpoint{
+		ProcessorType: ProcessorTypeEmbedding,
+		LastID:        ep.lastID,
+		UpdatedAt:     time.Now().UTC(),
+	}
+	return ep.checkpointRepository.SaveCheckpoint(context.Background(), checkpoint)
 }

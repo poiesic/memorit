@@ -79,3 +79,11 @@ type SearchResult struct {
 	Record *ChatRecord
 	Score  float32
 }
+
+// Checkpoint represents the processing state for a processor type.
+// Used to track progress and enable recovery after restarts.
+type Checkpoint struct {
+	ProcessorType string    // Processor identifier (e.g., "embedding", "concept")
+	LastID        ID        // Highest successfully processed record ID
+	UpdatedAt     time.Time // When the checkpoint was last saved
+}

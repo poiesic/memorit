@@ -430,6 +430,65 @@ func (r *ChatRepository) GetChatRecordsByConcept(ctx context.Context, conceptID 
 	return recordIDs, err
 }
 
+// GetChatRecordsAfterID retrieves chat records with ID greater than afterID.
+// Returns records ordered by ID ascending. Used for checkpoint recovery.
+func (r *ChatRepository) GetChatRecordsAfterID(ctx context.Context, afterID core.ID) ([]*core.ChatRecord, error) {
+	var results []*core.ChatRecord
+	err := r.backend.WithTx(func(tx *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = []byte(chatRecordPrefix + ":")
+		iter := tx.NewIterator(opts)
+		defer iter.Close()
+
+		for iter.Rewind(); iter.Valid(); iter.Next() {
+			item := iter.Item()
+			key := item.Key()
+
+			// Skip non-record keys (date index, concept index, sequence)
+			if string(key) == chatRecordIDSeq {
+				continue
+			}
+
+			// Read the record
+			var record *core.ChatRecord
+			err := item.Value(func(val []byte) error {
+				var unmarshalErr error
+				record, unmarshalErr = storage.UnmarshalChatRecord(val)
+				return unmarshalErr
+			})
+			if err != nil {
+				return err
+			}
+			if record == nil {
+				continue
+			}
+
+			// Only include records with ID > afterID
+			if record.Id > afterID {
+				results = append(results, record)
+			}
+		}
+		return nil
+	}, false)
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Sort by ID ascending
+	slices.SortFunc(results, func(a, b *core.ChatRecord) int {
+		if a.Id < b.Id {
+			return -1
+		}
+		if a.Id > b.Id {
+			return 1
+		}
+		return 0
+	})
+
+	return results, nil
+}
+
 // GetConceptsByDateRange returns concepts referenced in messages falling within a date range
 func (r *ChatRepository) GetConceptsByDateRange(ctx context.Context, start, end time.Time) ([]*core.Concept, error) {
 	records, err := r.GetChatRecordsByDateRange(ctx, start, end)

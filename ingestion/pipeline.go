@@ -12,17 +12,21 @@ import (
 	"github.com/poiesic/memorit/storage"
 )
 
+// progressInterval is the number of records between progress log messages during recovery.
+const progressInterval = 10
+
 // Pipeline orchestrates the ingestion and processing of chat records.
 // It manages concurrent processing of embeddings and concept extraction.
 type Pipeline struct {
-	chatRepository    storage.ChatRepository
-	conceptRepository storage.ConceptRepository
-	embeddingPool     *ants.Pool
-	conceptPool       *ants.Pool
-	embeddingProc     processor
-	conceptProc       processor
-	contextTurns      int // Number of previous turns to include for concept extraction context
-	logger            *slog.Logger
+	chatRepository       storage.ChatRepository
+	conceptRepository    storage.ConceptRepository
+	checkpointRepository storage.CheckpointRepository
+	embeddingPool        *ants.Pool
+	conceptPool          *ants.Pool
+	embeddingProc        processor
+	conceptProc          processor
+	contextTurns         int // Number of previous turns to include for concept extraction context
+	logger               *slog.Logger
 }
 
 // Option configures a Pipeline.
@@ -75,9 +79,12 @@ func WithLogger(logger *slog.Logger) Option {
 }
 
 // NewPipeline creates a new ingestion pipeline.
+// On startup, it loads checkpoints and synchronously processes any pending records
+// before returning. This ensures the pipeline is in a consistent state.
 func NewPipeline(
 	chatRepository storage.ChatRepository,
 	conceptRepository storage.ConceptRepository,
+	checkpointRepository storage.CheckpointRepository,
 	provider ai.AIProvider,
 	opts ...Option,
 ) (*Pipeline, error) {
@@ -86,6 +93,9 @@ func NewPipeline(
 	}
 	if conceptRepository == nil {
 		return nil, ErrConceptRepositoryRequired
+	}
+	if checkpointRepository == nil {
+		return nil, ErrCheckpointRepositoryRequired
 	}
 	if provider == nil {
 		return nil, ErrAIProviderRequired
@@ -113,12 +123,13 @@ func NewPipeline(
 
 	// Create pipeline with defaults
 	p := &Pipeline{
-		chatRepository:    chatRepository,
-		conceptRepository: conceptRepository,
-		embeddingPool:     embeddingPool,
-		conceptPool:       conceptsPool,
-		contextTurns:      2, // Default: 2 turns (up to 4 previous messages)
-		logger:            logger,
+		chatRepository:       chatRepository,
+		conceptRepository:    conceptRepository,
+		checkpointRepository: checkpointRepository,
+		embeddingPool:        embeddingPool,
+		conceptPool:          conceptsPool,
+		contextTurns:         2, // Default: 2 turns (up to 4 previous messages)
+		logger:               logger,
 	}
 
 	// Apply options (may override defaults)
@@ -130,13 +141,13 @@ func NewPipeline(
 	}
 
 	// Create processors after options are applied (so they get final config)
-	embeddingProc, err := newEmbeddingProcessor(chatRepository, provider.Embedder(), p.logger)
+	embeddingProc, err := newEmbeddingProcessor(chatRepository, checkpointRepository, provider.Embedder(), p.logger)
 	if err != nil {
 		p.Release()
 		return nil, err
 	}
 
-	conceptProc, err := newConceptProcessor(chatRepository, conceptRepository,
+	conceptProc, err := newConceptProcessor(chatRepository, conceptRepository, checkpointRepository,
 		provider.Embedder(), provider.ConceptExtractor(), p.contextTurns, p.logger)
 	if err != nil {
 		p.Release()
@@ -146,7 +157,126 @@ func NewPipeline(
 	p.embeddingProc = embeddingProc
 	p.conceptProc = conceptProc
 
+	// Recover any pending records synchronously before returning
+	if err := p.recover(context.Background()); err != nil {
+		p.Release()
+		return nil, err
+	}
+
 	return p, nil
+}
+
+// recover processes any pending records from before the last checkpoint.
+// This is called synchronously during pipeline startup.
+func (p *Pipeline) recover(ctx context.Context) error {
+	// Load embedding checkpoint
+	embeddingCheckpoint, err := p.checkpointRepository.LoadCheckpoint(ctx, ProcessorTypeEmbedding)
+	if err != nil {
+		return err
+	}
+
+	// Load concept checkpoint
+	conceptCheckpoint, err := p.checkpointRepository.LoadCheckpoint(ctx, ProcessorTypeConcept)
+	if err != nil {
+		return err
+	}
+
+	// Determine the lowest checkpoint ID (we need to process records after this)
+	// If either checkpoint is nil, we need to start from 0 to ensure that processor
+	// gets all records it needs.
+	var lowestCheckpointID core.ID
+	if embeddingCheckpoint == nil || conceptCheckpoint == nil {
+		// At least one processor has never run, start from beginning
+		lowestCheckpointID = 0
+	} else {
+		// Both have checkpoints, use the lower one
+		lowestCheckpointID = embeddingCheckpoint.LastID
+		if conceptCheckpoint.LastID < lowestCheckpointID {
+			lowestCheckpointID = conceptCheckpoint.LastID
+		}
+	}
+
+	// Get all records after the lowest checkpoint
+	pendingRecords, err := p.chatRepository.GetChatRecordsAfterID(ctx, lowestCheckpointID)
+	if err != nil {
+		return err
+	}
+
+	if len(pendingRecords) == 0 {
+		p.logger.Info("no pending records to recover")
+		return nil
+	}
+
+	p.logger.Info("recovering pending records", "count", len(pendingRecords))
+
+	// Extract IDs
+	allIDs := make([]core.ID, len(pendingRecords))
+	for i, record := range pendingRecords {
+		allIDs[i] = record.Id
+	}
+
+	// Process embeddings for records after embedding checkpoint
+	var embeddingLastID core.ID
+	if embeddingCheckpoint != nil {
+		embeddingLastID = embeddingCheckpoint.LastID
+	}
+	embeddingIDs := filterIDsAfter(allIDs, embeddingLastID)
+	if len(embeddingIDs) > 0 {
+		p.logger.Info("recovering embeddings", "count", len(embeddingIDs))
+		if err := p.processWithProgress(ctx, p.embeddingProc, "embeddings", embeddingIDs); err != nil {
+			return err
+		}
+	}
+
+	// Process concepts for records after concept checkpoint
+	var conceptLastID core.ID
+	if conceptCheckpoint != nil {
+		conceptLastID = conceptCheckpoint.LastID
+	}
+	conceptIDs := filterIDsAfter(allIDs, conceptLastID)
+	if len(conceptIDs) > 0 {
+		p.logger.Info("recovering concepts", "count", len(conceptIDs))
+		if err := p.processWithProgress(ctx, p.conceptProc, "concepts", conceptIDs); err != nil {
+			return err
+		}
+	}
+
+	p.logger.Info("recovery complete")
+	return nil
+}
+
+// processWithProgress processes records in batches with progress logging.
+func (p *Pipeline) processWithProgress(ctx context.Context, proc processor, name string, ids []core.ID) error {
+	total := len(ids)
+	for i := 0; i < total; i += progressInterval {
+		end := i + progressInterval
+		if end > total {
+			end = total
+		}
+
+		batch := ids[i:end]
+		if err := proc.process(ctx, batch...); err != nil {
+			return err
+		}
+
+		if err := proc.checkpoint(); err != nil {
+			p.logger.Error("error saving checkpoint during recovery", "processor", name, "err", err)
+		}
+
+		p.logger.Info("recovery progress", "processor", name, "processed", end, "total", total)
+	}
+	return nil
+}
+
+// filterIDsAfter returns IDs that are greater than afterID.
+func filterIDsAfter(ids []core.ID, afterID core.ID) []core.ID {
+	var result []core.ID
+	for _, id := range ids {
+		if id > afterID {
+			result = append(result, id)
+		}
+	}
+	return result
 }
 
 // IngestOptions holds optional parameters for ingestion.

@@ -73,6 +73,21 @@ type ChatRepository interface {
 	// referenced by chat messages within a date range
 	// Returns start <= Timestamp < end, ordered by timestamp.
 	GetConceptsByDateRange(ctx context.Context, start, end time.Time) ([]*core.Concept, error)
+
+	// GetChatRecordsAfterID retrieves chat records with ID greater than afterID.
+	// Returns records ordered by ID ascending. Used for checkpoint recovery.
+	GetChatRecordsAfterID(ctx context.Context, afterID core.ID) ([]*core.ChatRecord, error)
+}
+
+// CheckpointRepository provides operations for managing processor checkpoints.
+type CheckpointRepository interface {
+	// SaveCheckpoint persists a checkpoint for a processor type.
+	// Overwrites any existing checkpoint for the same processor type.
+	SaveCheckpoint(ctx context.Context, checkpoint *core.Checkpoint) error
+
+	// LoadCheckpoint retrieves the checkpoint for a processor type.
+	// Returns nil, nil if no checkpoint exists for this processor type.
+	LoadCheckpoint(ctx context.Context, processorType string) (*core.Checkpoint, error)
 }
 
 // ConceptRepository provides operations for managing concepts.

@@ -67,6 +67,14 @@ func main() {
 		panic(err)
 	}
 
+	err = g.AddStruct(reflect.TypeFor[core.Checkpoint](),
+		structops.WithField(),
+		structops.WithField(),
+		structops.WithField(opts))
+	if err != nil {
+		panic(err)
+	}
+
 	bs, err := g.Generate()
 	if err != nil {
 		panic(err)
