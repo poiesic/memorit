@@ -90,26 +90,6 @@ func (p *testAIProvider) Close() error {
 	return nil
 }
 
-// testCheckpointRepository implements storage.CheckpointRepository for testing
-type testCheckpointRepository struct {
-	checkpoints map[string]*core.Checkpoint
-}
-
-func newTestCheckpointRepository() *testCheckpointRepository {
-	return &testCheckpointRepository{
-		checkpoints: make(map[string]*core.Checkpoint),
-	}
-}
-
-func (r *testCheckpointRepository) SaveCheckpoint(ctx context.Context, checkpoint *core.Checkpoint) error {
-	r.checkpoints[checkpoint.ProcessorType] = checkpoint
-	return nil
-}
-
-func (r *testCheckpointRepository) LoadCheckpoint(ctx context.Context, processorType string) (*core.Checkpoint, error) {
-	return r.checkpoints[processorType], nil
-}
-
 func setupTestRepositories(t *testing.T) (storage.ChatRepository, storage.ConceptRepository, storage.CheckpointRepository, func()) {
 	backend, err := badger.OpenBackend(t.TempDir(), false)
 	require.NoError(t, err)

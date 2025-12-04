@@ -11,27 +11,12 @@ A semantic memory system for storing and retrieving conversational data using em
 - **Pluggable Backends**: Abstract interfaces for storage and AI services
 - **Fast Serialization**: Uses mus-go for efficient binary serialization
 
-## Architecture
+## Dependencies
 
-Memorit follows Clean Architecture principles with clear separation of concerns:
-
-```
-memorit/
-├── core/           # Pure domain models (ChatRecord, Concept, ID, SpeakerType)
-├── storage/        # Storage abstraction layer
-│   └── badger/     # BadgerDB implementation
-├── ai/             # AI service abstractions
-│   ├── openai/     # OpenAI-compatible implementation
-│   └── mock/       # Test doubles
-├── ingestion/      # Pipeline for processing chat records
-├── search/         # Hybrid semantic search engine
-├── reembed/        # Reembedding utilities for updating embeddings
-└── cmd/            # Command-line applications
-    ├── seeder/     # Database seeding utility
-    ├── searcher/   # Search interface
-    ├── reembedder/ # Embedding regeneration tool
-    └── musgen/     # Code generation for serialization
-```
+- [BadgerDB v4](https://github.com/dgraph-io/badger) - Embedded key-value store
+- [langchaingo](https://github.com/tmc/langchaingo) - LLM and embedding integrations
+- [mus-go](https://github.com/mus-format/mus-go) - Fast binary serialization
+- [ants](https://github.com/panjf2000/ants) - Worker pool implementation
 
 ### Core Domain (`core/`)
 
@@ -126,39 +111,9 @@ go test -v -cover ./storage/badger/
 
 ### Code Generation
 
-Memorit uses mus-go for binary serialization:
+Memorit uses mus-go for binary serialization. Delete `core/records_musg.gen.go` then use the `generate` task to regenerate serializable models. 
 
-```bash
-# Regenerate serialization code
-task generate
-
-# Or directly
-go generate ./...
-```
-
-### Domain Validation
-
-The core domain enforces business invariants:
-
-**ChatRecord validation:**
-- Contents must not be empty
-- SpeakerType must be valid (Human or AI)
-- Timestamp must not be in the future
-
-**Concept validation:**
-- Name must not be empty
-- Type must not be empty
-
-Fields populated by processors (embeddings, IDs) are not validated at the domain level.
-
-## Dependencies
-
-- [BadgerDB v4](https://github.com/dgraph-io/badger) - Embedded key-value store
-- [langchaingo](https://github.com/tmc/langchaingo) - LLM and embedding integrations
-- [mus-go](https://github.com/mus-format/mus-go) - Fast binary serialization
-- [ants](https://github.com/panjf2000/ants) - Worker pool implementation
-- [Task](https://taskfile.dev/) - Build automation
 
 ## License
 
-[License information]
+Licensed under the Apache License 2.0. See [LICENSE](LICENSE) for the full license text and [NOTICE](NOTICE) for third-party attributions.
