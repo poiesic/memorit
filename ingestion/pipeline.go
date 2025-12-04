@@ -74,20 +74,6 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
-// WithContextTurns sets the number of previous turns to include for concept extraction context.
-// When extracting concepts from a message, includes up to N previous turns of conversation.
-// A "turn" typically consists of 2 messages (user + assistant), so contextTurns=2 means
-// up to 4 previous messages will be included for context.
-// This provides context for terse messages and resolves anaphoric references.
-// Value is clamped to [0, 10] turns. Default is 2 turns.
-// A value of 0 means only the current message is used (no context).
-func WithContextTurns(turns int) Option {
-	return func(p *Pipeline) error {
-		p.contextTurns = max(0, min(turns, 10))
-		return nil
-	}
-}
-
 // NewPipeline creates a new ingestion pipeline.
 func NewPipeline(
 	chatRepository storage.ChatRepository,
@@ -137,9 +123,9 @@ func NewPipeline(
 
 	// Apply options (may override defaults)
 	for _, opt := range opts {
-		if err := opt(p); err != nil {
+		if optErr := opt(p); optErr != nil {
 			p.Release()
-			return nil, err
+			return nil, optErr
 		}
 	}
 

@@ -310,9 +310,9 @@ func readConcept(tx *badger.Txn, key []byte) (*core.Concept, error) {
 
 	var concept *core.Concept
 	err = item.Value(func(val []byte) error {
-		var err error
-		concept, err = storage.UnmarshalConcept(val)
-		return err
+		var unmarshalErr error
+		concept, unmarshalErr = storage.UnmarshalConcept(val)
+		return unmarshalErr
 	})
 	return concept, err
 }

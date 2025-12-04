@@ -26,13 +26,6 @@ type databaseOptions struct {
 	aiConfig *ai.Config
 }
 
-// WithAIConfig sets a custom AI configuration for embeddings and concept extraction.
-func WithAIConfig(config *ai.Config) DatabaseOption {
-	return func(opts *databaseOptions) {
-		opts.aiConfig = config
-	}
-}
-
 func NewDatabase(filePath string, opts ...DatabaseOption) (*Database, error) {
 	// Apply options
 	options := &databaseOptions{

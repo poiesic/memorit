@@ -449,9 +449,9 @@ func (r *ChatRepository) GetConceptsByDateRange(ctx context.Context, start, end 
 	err = r.backend.WithTx(func(tx *badger.Txn) error {
 		for id := range ids {
 			key := makeConceptKey(id)
-			concept, err := readConcept(tx, key)
-			if err != nil {
-				return err
+			concept, readErr := readConcept(tx, key)
+			if readErr != nil {
+				return readErr
 			}
 			if concept != nil {
 				result = append(result, concept)
@@ -476,9 +476,9 @@ func (r *ChatRepository) readChatRecord(tx *badger.Txn, key []byte) (*core.ChatR
 
 	var record *core.ChatRecord
 	err = item.Value(func(val []byte) error {
-		var err error
-		record, err = storage.UnmarshalChatRecord(val)
-		return err
+		var unmarshalErr error
+		record, unmarshalErr = storage.UnmarshalChatRecord(val)
+		return unmarshalErr
 	})
 	return record, err
 }

@@ -16,7 +16,6 @@ const (
 	chatRecordIDSeq         = "charecseq"
 	conceptRecordPrefix     = "conrec"
 	conceptTypeNamePrefix   = "contyna"
-	conceptIDSeq            = "conrecseq"
 )
 
 // makeChatRecordKey generates a key for a chat record by ID.
